@@ -1,21 +1,10 @@
 /**
  * AstroControl — app.js  (production)
  *
- * Arquitetura:
- *   STATE       — objeto canônico de estado da aplicação
- *   render()    — atualiza o DOM a partir do STATE (chamado via rAF)
- *   WS          — camada de comunicação com o backend
- *   Handlers    — traduzem eventos DOM em mensagens WS
- *
- * Melhorias sobre versão anterior:
- *   - Estado central (sem getElementById espalhado)
- *   - requestAnimationFrame para renders (sem setInterval no DOM)
- *   - Reconexão WebSocket com exponential backoff
- *   - Heartbeat ping/pong (detecta conexão zumbi)
- *   - Fila de comandos offline (reenviada ao reconectar)
- *   - Auth do terminal via POST (token, não senha na URL)
- *   - Feedback visual claro de todos os estados
- *   - Nunca quebra sem servidor
+ * Estado central → render via rAF
+ * WebSocket com backoff e heartbeat
+ * Fila de comandos offline
+ * Auth segura do terminal via POST
  */
 
 'use strict';
@@ -25,10 +14,8 @@
    ══════════════════════════════════════════════ */
 
 const STATE = {
-  /* conexão */
   wsConnected:   false,
   indiConnected: false,
-  /* dispositivos — espelho do server */
   devices: {
     mount:       { connected:false, state:'disconnected', ra:null, dec:null, alt:null, az:null, tracking:null, parked:false, slewing:false },
     camera:      { connected:false, state:'disconnected', exposure:null, gain:null, capturing:false },
@@ -37,32 +24,19 @@ const STATE = {
     rotator:     { connected:false, state:'disconnected', angle:null },
     gps:         { connected:false, state:'disconnected', lat:null, lon:null, fix:false, sats:0 },
   },
-  /* UI */
-  currentTab:    'mount',
-  slewRate:      16,
-  tracking:      null,
-  gotoStatus:    null,   // { success, message }
-  /* rede */
-  network:       { mode:'--', ip:'--', ssid:'--', signal:'--', ap_active:false, ap_clients:0, services:{} },
-  /* drivers */
-  drivers:       [],
-  indiserver:    false,
-  /* log */
-  logs:          [],   // { level, text, ts }
-  /* alinhamento */
-  align: {
-    pitch:0, roll:0, heading:0,
-    lat:-19.92, lon:-43.93, decMag:-21.4,
-    simMode: true,
-  },
+  currentTab:  'mount',
+  slewRate:    16,
+  tracking:    null,
+  gotoStatus:  null,
+  network:     { mode:'--', ip:'--', ssid:'--', signal:'--', ap_active:false, ap_clients:0, services:{} },
+  drivers:     [],
+  indiserver:  false,
+  logs:        [],
 };
 
-/* Assinantes de mudanças de estado */
-const subscribers = [];
-function subscribe(fn) { subscribers.push(fn); }
-function notifyAll() { subscribers.forEach(fn => fn(STATE)); }
+/* Render agendado */
+let rafPending = false;
 
-/** Atualiza STATE e agenda render */
 function setState(patch) {
   deepMerge(STATE, patch);
   scheduleRender();
@@ -70,7 +44,8 @@ function setState(patch) {
 
 function deepMerge(target, src) {
   for (const k of Object.keys(src)) {
-    if (src[k] !== null && typeof src[k] === 'object' && !Array.isArray(src[k]) && target[k] && typeof target[k] === 'object') {
+    if (src[k] !== null && typeof src[k] === 'object' && !Array.isArray(src[k])
+        && target[k] !== null && typeof target[k] === 'object') {
       deepMerge(target[k], src[k]);
     } else {
       target[k] = src[k];
@@ -78,11 +53,6 @@ function deepMerge(target, src) {
   }
 }
 
-/* ══════════════════════════════════════════════
-   RENDER — requestAnimationFrame
-   ══════════════════════════════════════════════ */
-
-let rafPending = false;
 function scheduleRender() {
   if (!rafPending) {
     rafPending = true;
@@ -90,32 +60,26 @@ function scheduleRender() {
   }
 }
 
+/* ══════════════════════════════════════════════
+   RENDER
+   ══════════════════════════════════════════════ */
+
 function render() {
   rafPending = false;
 
-  /* Status dots da topbar */
+  /* Status dots topbar */
   setDot('pi',   STATE.wsConnected);
   setDot('indi', STATE.indiConnected);
-  setDot('gps',  STATE.devices.gps.fix);
+  setDot('gps',  STATE.devices.gps.fix, !STATE.devices.gps.fix && STATE.devices.gps.sats > 0);
   setDot('ap',   STATE.network.ap_active);
 
-  /* Montagem */
-  if (STATE.currentTab === 'mount') renderMount();
-
-  /* Alinhamento */
-  if (STATE.currentTab === 'align') renderAlign();
-
-  /* Drivers */
+  if (STATE.currentTab === 'mount')   renderMount();
   if (STATE.currentTab === 'drivers') renderDrivers();
-
-  /* Rede */
   if (STATE.currentTab === 'network') renderNetwork();
 
-  /* GoTo status */
   renderGotoStatus();
 }
 
-/* ── Montagem ── */
 function renderMount() {
   const m = STATE.devices.mount;
   setText('m-ra',  m.ra  || '--');
@@ -123,30 +87,24 @@ function renderMount() {
   setText('m-alt', m.alt != null ? m.alt + '°' : '--');
   setText('m-az',  m.az  != null ? m.az  + '°' : '--');
 
-  /* badge de estado */
+  /* Badge de estado */
   const badge = $('mount-state-badge');
   if (badge) {
-    const labels = { disconnected:'Desconectado', idle:'Pronto', tracking:'Rastreando',
-                     slewing:'Slewing…', parked:'Park', error:'Erro' };
+    const labels = {
+      disconnected:'Desconectado', idle:'Pronto',
+      tracking:'Rastreando', slewing:'Slewing…',
+      parked:'Park', error:'Erro',
+    };
     badge.textContent = labels[m.state] || m.state;
-    badge.className = 'mount-badge mount-badge-' + (m.state || 'disconnected');
+    badge.className   = 'mount-badge mount-badge-' + (m.state || 'disconnected');
   }
 
-  /* botões de rastreamento */
+  /* Botões de tracking */
   document.querySelectorAll('.trk button').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === STATE.tracking);
   });
 }
 
-/* ── Alinhamento ── */
-function renderAlign() {
-  /* feito pelo alignment.js via applyAlignData() */
-  const { lat, decMag } = STATE.align;
-  setText('a-lat',   lat.toFixed(2) + '°');
-  setText('a-decmag', decMag.toFixed(1) + '°');
-}
-
-/* ── Drivers ── */
 function renderDrivers() {
   const DRIVER_KEYS = {
     mount:'indi_eqmod_telescope', camera:'indi_canon_ccd',
@@ -154,38 +112,36 @@ function renderDrivers() {
     rotator:'indi_simulator_rotator', gps:'indi_gpsd',
   };
 
-  Object.entries(DRIVER_KEYS).forEach(([key, driverName]) => {
-    const dev  = STATE.devices[key];
-    const dot  = $('dot-' + key);
-    const tog  = $('tog-' + key);
+  Object.entries(DRIVER_KEYS).forEach(([key]) => {
+    const dev = STATE.devices[key];
     if (!dev) return;
-    if (dot) dot.className = 'dot ' + (dev.state === 'disconnected' ? 'dx' : dev.connected ? 'dg' : 'da');
+    const dot = $('dot-' + key);
+    const tog = $('tog-' + key);
+    if (dot) dot.className = 'dot ' +
+      (dev.state === 'error' ? 'dr' : dev.connected ? 'dg' : dev.state !== 'disconnected' ? 'da' : 'dx');
     if (tog) tog.classList.toggle('on', dev.connected);
   });
 
   /* Log */
   const logEl = $('indi-log');
-  if (logEl) {
+  if (logEl && logEl.dataset.logLen !== String(STATE.logs.length)) {
     const frag = document.createDocumentFragment();
     STATE.logs.forEach(({ level, text }) => {
-      const div = document.createElement('div');
+      const div  = document.createElement('div');
       const span = document.createElement('span');
-      span.className = level;
+      span.className   = level;
       span.textContent = level === 'ok' ? '[OK]' : level === 'er' ? '[ER]' : level === 'wn' ? '[--]' : '[..]';
       div.appendChild(span);
       div.appendChild(document.createTextNode(' ' + text));
       frag.appendChild(div);
     });
-    if (logEl.dataset.logLen !== String(STATE.logs.length)) {
-      logEl.innerHTML = '';
-      logEl.appendChild(frag);
-      logEl.scrollTop = logEl.scrollHeight;
-      logEl.dataset.logLen = STATE.logs.length;
-    }
+    logEl.innerHTML = '';
+    logEl.appendChild(frag);
+    logEl.scrollTop = logEl.scrollHeight;
+    logEl.dataset.logLen = STATE.logs.length;
   }
 }
 
-/* ── Rede ── */
 function renderNetwork() {
   const n = STATE.network;
   setText('net-mode',   n.mode);
@@ -198,28 +154,26 @@ function renderNetwork() {
   const inf = $('ap-info');
   if (tog) tog.classList.toggle('on', n.ap_active);
   if (sub) sub.textContent = n.ap_active
-    ? `Ativo · SSID: AstroPi · ${n.ap_clients} cliente(s)`
+    ? `Ativo · AstroPi · ${n.ap_clients} cliente(s)`
     : 'Desativado · sobe automaticamente sem WiFi';
   if (inf) inf.style.opacity = n.ap_active ? '1' : '0.3';
+  setText('ap-clients', String(n.ap_clients));
 
   Object.entries(n.services || {}).forEach(([k, up]) => {
     const dot = $('svc-dot-' + k);
     if (dot) dot.className = 'dot ' + (up ? 'dg' : 'dx');
   });
-
-  setText('ap-clients', String(n.ap_clients));
 }
 
-/* ── GoTo status ── */
 function renderGotoStatus() {
   const el = $('goto-status');
-  if (!el || !STATE.gotoStatus) return;
+  if (!el) return;
+  if (!STATE.gotoStatus) { el.textContent = ''; return; }
   const { success, message } = STATE.gotoStatus;
   el.style.color = success === null ? '#EF9F27' : success ? '#5DCAA5' : '#E24B4A';
   el.textContent = (success === null ? '⟳ ' : success ? '✓ ' : '✗ ') + message;
 }
 
-/* ── Dots de status ── */
 function setDot(id, on, warn) {
   const el = $('st-' + id);
   if (!el) return;
@@ -228,23 +182,24 @@ function setDot(id, on, warn) {
 }
 
 /* ══════════════════════════════════════════════
-   WEBSOCKET — RECONEXÃO ROBUSTA
+   WEBSOCKET — BACKEND
    ══════════════════════════════════════════════ */
 
 const WS_HOST = window.location.hostname || 'astropi.local';
 const WS_PORT = parseInt(window.location.port) || 3000;
 const WS_URL  = `ws://${WS_HOST}:${WS_PORT}/ws`;
 
-let ws          = null;
-let wsBackoff   = 1000;
-let wsTimer     = null;
-let wsAlive     = false;
-let hbTimer     = null;
-const CMD_QUEUE = [];  // { type, ...payload } — enviados ao reconectar
+let ws         = null;
+let wsBackoff  = 1000;
+let wsTimer    = null;
+let wsAlive    = false;
+let hbTimer    = null;
+const CMD_QUEUE = [];
 
 function connectWS() {
   clearTimeout(wsTimer);
-  try { ws = new WebSocket(WS_URL); } catch(e) {
+  try { ws = new WebSocket(WS_URL); }
+  catch {
     setState({ wsConnected: false });
     wsTimer = setTimeout(connectWS, wsBackoff);
     wsBackoff = Math.min(wsBackoff * 1.5, 30000);
@@ -263,7 +218,7 @@ function connectWS() {
   };
 
   ws.onmessage = (evt) => {
-    try { handleServerMsg(JSON.parse(evt.data)); } catch(e) {}
+    try { handleServerMsg(JSON.parse(evt.data)); } catch {}
   };
 
   ws.onerror = () => {};
@@ -271,7 +226,7 @@ function connectWS() {
   ws.onclose = () => {
     stopHeartbeat();
     setState({ wsConnected: false, indiConnected: false });
-    addLog('wn', `Bridge offline — reconecta em ${Math.round(wsBackoff/1000)}s`);
+    addLog('wn', `Offline — reconecta em ${Math.round(wsBackoff / 1000)}s`);
     wsTimer = setTimeout(connectWS, wsBackoff);
     wsBackoff = Math.min(wsBackoff * 1.5, 30000);
   };
@@ -285,60 +240,55 @@ function sendWS(msg) {
   return false;
 }
 
-/** Envia ou enfileira comando para envio posterior */
 function sendCmd(msg, queueIfOffline = true) {
   if (!sendWS(msg) && queueIfOffline) {
     CMD_QUEUE.push(msg);
-    addLog('wn', `Comando na fila: ${msg.type}`);
+    addLog('wn', `Na fila: ${msg.type}`);
   }
 }
 
 function flushCmdQueue() {
   while (CMD_QUEUE.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-    const msg = CMD_QUEUE.shift();
-    sendWS(msg);
-    addLog('ok', `Reenviado: ${msg.type}`);
+    addLog('ok', `Reenviado: ${CMD_QUEUE[0].type}`);
+    sendWS(CMD_QUEUE.shift());
   }
 }
 
-/* ── Heartbeat ── */
 function startHeartbeat() {
   stopHeartbeat();
   hbTimer = setInterval(() => {
-    if (!wsAlive) {
-      ws && ws.close();
-      return;
-    }
+    if (!wsAlive) { ws && ws.close(); return; }
     wsAlive = false;
     sendWS({ type: 'ping', ts: Date.now() });
   }, 15000);
 }
 
-function stopHeartbeat() {
-  clearInterval(hbTimer);
-}
+function stopHeartbeat() { clearInterval(hbTimer); }
 
 /* ══════════════════════════════════════════════
    HANDLER DE MENSAGENS DO SERVIDOR
    ══════════════════════════════════════════════ */
 
 function handleServerMsg(msg) {
-  wsAlive = true;  // qualquer mensagem = conexão viva
+  wsAlive = true;
 
   switch (msg.type) {
-
-    case 'pong':
-      wsAlive = true;
-      break;
+    case 'pong': break;
 
     case 'full_state':
-      /* Sincronização completa — substitui devices */
       if (msg.devices) setState({ devices: msg.devices });
       break;
 
     case 'device_update':
       if (msg.key && STATE.devices[msg.key]) {
         STATE.devices[msg.key] = { ...STATE.devices[msg.key], ...msg.data };
+        /* Propaga GPS para alignment.js */
+        if (msg.key === 'gps' && typeof applyAlignData === 'function') {
+          const gps = STATE.devices.gps;
+          if (gps.lat && gps.lon) {
+            applyAlignData({ lat: gps.lat, lon: gps.lon, fix: gps.fix, sats: gps.sats });
+          }
+        }
         scheduleRender();
       }
       break;
@@ -346,10 +296,9 @@ function handleServerMsg(msg) {
     case 'indi_status':
       setState({ indiConnected: !!msg.connected });
       if (!msg.connected) {
-        /* Marca todos os dispositivos como desconectados */
         Object.keys(STATE.devices).forEach(k => {
           STATE.devices[k].connected = false;
-          STATE.devices[k].state = 'disconnected';
+          STATE.devices[k].state     = 'disconnected';
         });
         scheduleRender();
       }
@@ -357,7 +306,6 @@ function handleServerMsg(msg) {
 
     case 'driver_status':
       setState({ indiserver: !!msg.indiserver, drivers: msg.drivers || [] });
-      /* Atualiza conexão dos devices a partir dos drivers */
       if (msg.drivers) {
         msg.drivers.forEach(d => {
           const key = driverNameToKey(d.name);
@@ -372,14 +320,15 @@ function handleServerMsg(msg) {
 
     case 'goto_result':
       setState({ gotoStatus: { success: msg.success, message: msg.message } });
-      /* Limpa após 5s */
-      if (msg.success !== null) {
-        setTimeout(() => setState({ gotoStatus: null }), 8000);
-      }
+      if (msg.success !== null) setTimeout(() => setState({ gotoStatus: null }), 8000);
       break;
 
     case 'network':
-      setState({ network: msg });
+      // eslint-disable-next-line no-unused-vars
+      (function() {
+        const { type: _t, ...net } = msg;
+        setState({ network: net });
+      })();
       break;
 
     case 'log':
@@ -388,24 +337,57 @@ function handleServerMsg(msg) {
   }
 }
 
-/* ── Mapeia nome de driver → chave de device ── */
 function driverNameToKey(name) {
   if (!name) return null;
   const n = name.toLowerCase();
-  if (n.includes('eqmod')||n.includes('telescope')||n.includes('mount')) return 'mount';
-  if (n.includes('ccd')||n.includes('camera')||n.includes('canon'))      return 'camera';
-  if (n.includes('moonlite')||n.includes('focuser'))                      return 'focuser';
-  if (n.includes('efw')||n.includes('filter'))                            return 'filterwheel';
-  if (n.includes('rotat'))                                                 return 'rotator';
-  if (n.includes('gps'))                                                   return 'gps';
+  if (n.includes('eqmod') || n.includes('telescope') || n.includes('mount')) return 'mount';
+  if (n.includes('ccd')   || n.includes('camera')    || n.includes('canon')) return 'camera';
+  if (n.includes('moonlite') || n.includes('focuser'))                        return 'focuser';
+  if (n.includes('efw')   || n.includes('filter'))                            return 'filterwheel';
+  if (n.includes('rotat'))                                                     return 'rotator';
+  if (n.includes('gps'))                                                       return 'gps';
   return null;
 }
 
-/* ── Log interno ── */
 function addLog(level, text) {
-  STATE.logs.push({ level, text, ts: Date.now() });
+  STATE.logs.push({ level, text });
   if (STATE.logs.length > 200) STATE.logs.splice(0, STATE.logs.length - 200);
   if (STATE.currentTab === 'drivers') scheduleRender();
+}
+
+/* ══════════════════════════════════════════════
+   WEBSOCKET — SENSORES (Python bridge)
+   ══════════════════════════════════════════════ */
+
+const SENSOR_PORT = 8765;
+let sensorWs      = null;
+let sensorBackoff = 2000;
+
+function connectSensors() {
+  try { sensorWs = new WebSocket(`ws://${WS_HOST}:${SENSOR_PORT}`); }
+  catch { setTimeout(connectSensors, sensorBackoff); return; }
+
+  sensorWs.onopen = () => {
+    sensorBackoff = 2000;
+    setDot('gps', false, true); /* amarelo = conectado mas sem fix ainda */
+    if (typeof updateSensorBanner === 'function') updateSensorBanner(true);
+  };
+
+  sensorWs.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data);
+      /* data = { pitch, roll, heading, lat, lon, decMag, fix, sats } */
+      if (typeof applyAlignData === 'function') applyAlignData(data);
+      setDot('gps', data.fix, !data.fix && (data.sats || 0) > 0);
+    } catch {}
+  };
+
+  sensorWs.onclose = () => {
+    setDot('gps', false);
+    if (typeof updateSensorBanner === 'function') updateSensorBanner(false);
+    sensorBackoff = Math.min(sensorBackoff * 1.5, 30000);
+    setTimeout(connectSensors, sensorBackoff);
+  };
 }
 
 /* ══════════════════════════════════════════════
@@ -426,13 +408,13 @@ function sw(id, el) {
   STATE.currentTab = id;
   scheduleRender();
 
-  if (id === 'align')   renderAlignCanvases();
+  if (id === 'align')   { if (typeof renderAlign === 'function') renderAlign(); }
   if (id === 'network') sendCmd({ type: 'network_status' }, false);
   if (id === 'drivers') sendCmd({ type: 'get_state' }, false);
 }
 
 /* ══════════════════════════════════════════════
-   MONTAGEM — CONTROLES
+   MONTAGEM
    ══════════════════════════════════════════════ */
 
 function setRate(el, rate) {
@@ -443,18 +425,18 @@ function setRate(el, rate) {
 }
 
 function jp(dir) {
-  $('j'+dir)?.classList.add('pr');
+  $('j' + dir)?.classList.add('pr');
   sendCmd({ type: 'slew_start', direction: dir, rate: STATE.slewRate });
 }
 
 function jr(dir) {
-  $('j'+dir)?.classList.remove('pr');
+  $('j' + dir)?.classList.remove('pr');
   sendCmd({ type: 'slew_stop', direction: dir });
 }
 
 function jStop() {
   ['N','S','E','W'].forEach(d => {
-    $('j'+d)?.classList.remove('pr');
+    $('j' + d)?.classList.remove('pr');
     sendCmd({ type: 'slew_stop', direction: d }, false);
   });
 }
@@ -463,7 +445,6 @@ function setTrk(el, mode) {
   document.querySelectorAll('.trk button').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   STATE.tracking = mode === 'None' ? null : mode;
-  el.dataset.mode = mode;
   sendCmd({ type: 'tracking', mode });
 }
 
@@ -481,13 +462,8 @@ function doGotoCoords() {
   sendCmd({ type: 'goto_coords', ra, dec });
 }
 
-function syncMount() {
-  sendCmd({ type: 'sync' });
-}
-
-function parkMount() {
-  sendCmd({ type: 'park' });
-}
+function syncMount()  { sendCmd({ type: 'sync' }); }
+function parkMount()  { sendCmd({ type: 'park' }); }
 
 /* ══════════════════════════════════════════════
    DRIVERS
@@ -504,7 +480,7 @@ const DRIVER_MAP = {
 };
 
 function toggleDriver(key) {
-  const tog = $('tog-' + key);
+  const tog  = $('tog-' + key);
   if (!tog) return;
   const willOn = !tog.classList.contains('on');
   sendCmd({ type: willOn ? 'driver_start' : 'driver_stop', driver: DRIVER_MAP[key] || key });
@@ -519,18 +495,15 @@ function connectVNC(frameId, statusId, port) {
   const status = $(statusId);
   if (!frame) return;
   const url = `http://${WS_HOST}:${port}/vnc_lite.html?autoconnect=1&reconnect=1&resize=scale`;
-  frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000"></iframe>`;
+  frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
   if (status) status.textContent = 'Conectado';
 }
 
 function showAuth(type) {
-  $('auth-' + type)?.style && ($('auth-' + type).style.display = 'block');
+  const box = $('auth-' + type);
+  if (box) box.style.display = 'block';
 }
 
-/**
- * Auth segura: envia credenciais via POST → recebe token → abre ttyd com token.
- * Nunca expõe senha em URL.
- */
 async function doAuth(type) {
   const errEl = $('err-' + type);
   if (errEl) errEl.textContent = '';
@@ -551,11 +524,11 @@ async function doAuth(type) {
 
       const frame  = $('term-frame');
       const status = $('term-status');
-      // ttyd com token como query param — backend valida via /api/auth/verify
-      frame.innerHTML = `<iframe src="http://${WS_HOST}:7681/?token=${token}" style="width:100%;height:100%;border:none;background:#000"></iframe>`;
+      /* Token como query param — backend valida via /api/auth/verify */
+      frame.innerHTML = `<iframe src="http://${WS_HOST}:7681/?token=${token}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
       if (status) status.textContent = 'Conectado';
-    } catch(e) {
-      if (errEl) errEl.textContent = 'Erro ao autenticar: ' + e.message;
+    } catch (e) {
+      if (errEl) errEl.textContent = 'Erro: ' + e.message;
     }
 
   } else if (type === 'desktop') {
@@ -564,7 +537,7 @@ async function doAuth(type) {
     const frame  = $('vnc-d-frame');
     const status = $('vnc-d-status');
     const url = `http://${WS_HOST}:6082/vnc_lite.html?autoconnect=1&reconnect=1&resize=scale&password=${encodeURIComponent(pwd)}`;
-    frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000"></iframe>`;
+    frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
     if (status) status.textContent = 'Conectado';
   }
 }
@@ -574,54 +547,11 @@ async function doAuth(type) {
    ══════════════════════════════════════════════ */
 
 function toggleAP() {
-  const willOn = !STATE.network.ap_active;
-  sendCmd({ type: 'ap_toggle', enable: willOn });
+  sendCmd({ type: 'ap_toggle', enable: !STATE.network.ap_active });
 }
 
 /* ══════════════════════════════════════════════
-   ALINHAMENTO — BRIDGE COM alignment.js
-   ══════════════════════════════════════════════ */
-
-const SENSOR_PORT = 8765;
-let sensorWs = null;
-let sensorBackoff = 2000;
-
-function connectSensors() {
-  try { sensorWs = new WebSocket(`ws://${WS_HOST}:${SENSOR_PORT}`); }
-  catch { setTimeout(connectSensors, sensorBackoff); return; }
-
-  sensorWs.onopen = () => {
-    sensorBackoff = 2000;
-    setDot('gps', true);
-    /* Desativa simulação quando dados reais chegarem */
-    STATE.align.simMode = false;
-    const note = document.querySelector('.sim-note');
-    if (note) note.textContent = 'Dados reais do Python bridge ativos';
-  };
-
-  sensorWs.onmessage = (evt) => {
-    try {
-      const d = JSON.parse(evt.data);
-      /* d = { pitch, roll, heading, lat, lon, decMag, fix, sats } */
-      Object.assign(STATE.align, d);
-      setDot('gps', d.fix, !d.fix && d.sats > 0);
-      if (typeof applyAlignData === 'function') applyAlignData(STATE.align);
-    } catch {}
-  };
-
-  sensorWs.onclose = () => {
-    setDot('gps', false);
-    setTimeout(connectSensors, sensorBackoff);
-    sensorBackoff = Math.min(sensorBackoff * 1.5, 30000);
-  };
-}
-
-function renderAlignCanvases() {
-  if (typeof renderAlign === 'function') renderAlign();
-}
-
-/* ══════════════════════════════════════════════
-   RELÓGIO UTC — rAF
+   RELÓGIO UTC
    ══════════════════════════════════════════════ */
 
 function tickClock() {
@@ -629,7 +559,7 @@ function tickClock() {
   const el = $('utc');
   if (el) {
     el.textContent =
-      String(d.getUTCHours()).padStart(2,'0') + ':' +
+      String(d.getUTCHours()).padStart(2,'0')   + ':' +
       String(d.getUTCMinutes()).padStart(2,'0') + ':' +
       String(d.getUTCSeconds()).padStart(2,'0') + ' UTC';
   }
@@ -637,11 +567,11 @@ function tickClock() {
 }
 
 /* ══════════════════════════════════════════════
-   UTILIDADES
+   UTILITÁRIOS
    ══════════════════════════════════════════════ */
 
 function $(id)        { return document.getElementById(id); }
-function setText(id, t) { const e = $(id); if (e) e.textContent = t; }
+function setText(id, t) { const e = $(id); if (e && e.textContent !== t) e.textContent = t; }
 
 /* ══════════════════════════════════════════════
    SERVICE WORKER
@@ -655,21 +585,11 @@ if ('serviceWorker' in navigator) {
    INIT
    ══════════════════════════════════════════════ */
 
-/* Esconde painéis inativos */
 document.querySelectorAll('.panel, .novnc-panel').forEach(p => {
   if (!p.classList.contains('active')) p.style.display = 'none';
-});
-
-/* Marca botões de tracking com data-mode */
-document.querySelectorAll('.trk button').forEach(b => {
-  const txt = b.textContent.trim();
-  const map = { Sideral:'Sidereal', Lunar:'Lunar', Solar:'Solar', Off:'None' };
-  b.dataset.mode = map[txt] || txt;
 });
 
 connectWS();
 connectSensors();
 requestAnimationFrame(tickClock);
-
-/* Render inicial */
 scheduleRender();
