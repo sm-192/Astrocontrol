@@ -82,7 +82,7 @@ print_step "Diretório: $ASTRO_DIR"
 print_step "Hostname: $(hostname)"
 echo ""
 
-read -p "Continuar com a instalação? (s/N): " -n 1 -r
+read -p "Continuar com a instalação? (S/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Ss]$ ]]; then
     print_warning "Instalação cancelada pelo usuário"
@@ -380,8 +380,9 @@ print_success "Serviços KStars e PHD2 configurados"
 # ═══════════════════════════════════════════════════════════════════════════
 print_header "PASSO 7: Instalando ttyd (Terminal Web)"
 
-print_step "Instalando ttyd..."
-apt install -y -qq ttyd || { print_error "Falha ao instalar ttyd"; exit 1; }
+print_step "Instalando ttyd (via binário ARM64)..."
+wget https://github.com/tsl0922/ttyd/releases/download/1.7.3/ttyd.aarch64 -O /usr/bin/ttyd
+chmod +x /usr/bin/ttyd || { print_error "Falha ao instalar ttyd"; exit 1; }
 
 print_step "Criando serviço ttyd.service (senha: $TTYD_PASS)..."
 cat > /etc/systemd/system/ttyd.service << EOF
