@@ -713,7 +713,8 @@ function connectVNC(frameId, statusId, port) {
   const frame = $(frameId);
   const status = $(statusId);
   if (!frame) return;
-  const url = `http://${WS_HOST}:${port}/vnc_lite.html?autoconnect=1&reconnect=1&resize=scale`;
+  // Adicionado &cursor=false para mobile e &autoconnect=1
+  const url = `http://${WS_HOST}:${port}/vnc.html?autoconnect=1&reconnect=1&resize=scale&cursor=false`;
   frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
   if (status) status.textContent = 'Conectado';
 }
@@ -751,7 +752,7 @@ async function doAuth(type) {
     if (!pwd) { if (errEl) errEl.textContent = 'Digite a senha VNC.'; return; }
     const frame = $('vnc-d-frame');
     const status = $('vnc-d-status');
-    const url = `http://${WS_HOST}:6082/vnc_lite.html?autoconnect=1&reconnect=1&resize=scale&password=${encodeURIComponent(pwd)}`;
+    const url = `http://${WS_HOST}:6082/vnc.html?autoconnect=1&reconnect=1&resize=scale&cursor=false&password=${encodeURIComponent(pwd)}`;
     frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
     if (status) status.textContent = 'Conectado';
   }
