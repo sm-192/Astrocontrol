@@ -67,8 +67,8 @@ function render() {
 
   setDot('pi', STATE.wsConnected);
   setDot('indi', STATE.indiConnected);
-  setDot('gps', STATE.devices.gps.fix, !STATE.devices.gps.fix && STATE.devices.gps.sats > 0);
   setDot('ap', STATE.network.ap_active);
+  renderGpsSatIndicator();
 
   if (STATE.currentTab === 'mount') renderMount();
   if (STATE.currentTab === 'drivers') renderDrivers();
@@ -79,25 +79,188 @@ function render() {
 
 function renderMount() {
   const m = STATE.devices.mount;
-  setText('m-ra', m.ra || '--');
-  setText('m-dec', m.dec || '--');
-  setText('m-alt', m.alt != null ? m.alt + '°' : '--');
-  setText('m-az', m.az != null ? m.az + '°' : '--');
+  const f = STATE.devices.focuser;
+  const r = STATE.devices.rotator;
+  const fw= STATE.devices.filterwheel;
+  const c = STATE.devices.camera;
 
+  // ── Coordenadas ──
+  setText('m-ra',  m.ra  || '--');
+  setText('m-dec', m.dec || '--');
+  setText('m-alt', m.alt  != null ? m.alt  + '°' : '--');
+  setText('m-az',  m.az   != null ? m.az   + '°' : '--');
+
+  // ── Badge de estado ──
   const badge = $('mount-state-badge');
   if (badge) {
-    const labels = {
-      disconnected: 'Desconectado', idle: 'Pronto',
-      tracking: 'Rastreando', slewing: 'Slewing…',
-      parked: 'Park', error: 'Erro',
-    };
+    const labels = { disconnected:'Desconectado', idle:'Pronto', tracking:'Rastreando', slewing:'Slewing…', parked:'Park', error:'Erro' };
     badge.textContent = labels[m.state] || m.state;
     badge.className = 'mount-badge mount-badge-' + (m.state || 'disconnected');
   }
 
+  // ── Pier side ──
+  const pier = $('pier-badge');
+  if (pier) {
+    const side = m.pierSide || null;
+    if (side === 'W' || side === 'West') {
+      pier.textContent = 'W · Leste'; pier.className = 'pier-badge west';
+    } else if (side === 'E' || side === 'East') {
+      pier.textContent = 'E · Oeste'; pier.className = 'pier-badge east';
+    } else {
+      pier.textContent = '–'; pier.className = 'pier-badge';
+    }
+  }
+
+  // ── Park button ──
+  const btnPark = $('btn-park');
+  if (btnPark) btnPark.classList.toggle('parked', !!m.parked);
+
+  // ── Rastreamento ──
   document.querySelectorAll('.trk button').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === STATE.tracking);
   });
+
+  // ── Meridiano (ha = hora angle estimado via AR e LST) ──
+  renderMeridianBar(m);
+
+  // ── Focalizador ──
+  setText('focus-pos', f.position != null ? f.position : '--');
+  const fbadge = $('focus-state-badge');
+  if (fbadge) {
+    if (!f.connected)    { fbadge.textContent = 'Offline'; fbadge.className = 'sec-badge'; }
+    else if (f.moving)   { fbadge.textContent = 'Movendo'; fbadge.className = 'sec-badge busy'; }
+    else                 { fbadge.textContent = 'OK';      fbadge.className = 'sec-badge ok'; }
+  }
+  // Atualiza abs input como hint
+  const fabsInp = $('focus-abs-val');
+  if (fabsInp && f.position != null && fabsInp !== document.activeElement) {
+    fabsInp.value = f.position;
+  }
+
+  // ── Roda de filtros ──
+  renderFilterSlots(fw);
+  const fwbadge = $('filter-state-badge');
+  if (fwbadge) {
+    if (!fw.connected)   { fwbadge.textContent = 'Offline'; fwbadge.className = 'sec-badge'; }
+    else if (fw.filter)  { fwbadge.textContent = fw.filter; fwbadge.className = 'sec-badge ok'; }
+    else                 { fwbadge.textContent = `Slot ${fw.slot || '?'}`; fwbadge.className = 'sec-badge ok'; }
+  }
+
+  // ── Rotacionador ──
+  renderRotator(r);
+
+  // ── Câmera ──
+  renderCameraMini(c);
+}
+
+function renderMeridianBar(m) {
+  // Estimativa de hora angular: usamos ra_raw e longitude do GPS
+  const meridPos = $('meridian-pos');
+  const meridVal = $('meridian-val');
+  if (!meridPos || !meridVal) return;
+
+  const ra = m.ra_raw;
+  const lat= STATE.devices.gps?.lat;
+  if (ra == null) { meridVal.textContent = '--'; meridPos.style.left = '50%'; return; }
+
+  // LST aproximado: usa hora UTC + longitude
+  const now = new Date();
+  const lon = STATE.devices.gps?.lon || 0;
+  const jd  = 2440587.5 + now.getTime() / 86400000;
+  const T   = (jd - 2451545.0) / 36525;
+  let gmst  = 280.46061837 + 360.98564736629 * (jd - 2451545) + T * T * 0.000387933;
+  gmst = ((gmst % 360) + 360) % 360;
+  const lst = (gmst + lon) / 15; // em horas
+  const ha  = ((lst - ra) % 24 + 24) % 24; // hora angular 0-24
+  const haDeg = ha > 12 ? ha - 24 : ha;    // -12 a +12
+
+  // Posiciona o indicador: centro = meridiano (0h)
+  const pct = 50 + (haDeg / 12) * 50;
+  meridPos.style.left = Math.max(2, Math.min(98, pct)) + '%';
+
+  const haH = Math.floor(Math.abs(haDeg));
+  const haM = Math.round((Math.abs(haDeg) - haH) * 60);
+  meridVal.textContent = `${haDeg >= 0 ? '+' : '−'}${haH}h${String(haM).padStart(2,'0')}m ${haDeg >= 0 ? '(Leste)' : '(Oeste)'}`;
+  meridVal.style.color = Math.abs(haDeg) > 5.5 ? 'var(--amber)' : 'var(--muted)';
+}
+
+function renderFilterSlots(fw) {
+  const container = $('filter-slots');
+  if (!container) return;
+  if (!fw.connected || !fw.filterNames || fw.filterNames.length === 0) {
+    container.innerHTML = '<span class="filter-empty">Driver offline</span>';
+    return;
+  }
+  const chips = fw.filterNames.map((name, i) => {
+    const slot = i + 1;
+    const active = fw.slot === slot;
+    return `<button class="filter-chip ${active ? 'active' : ''}" onclick="setFilter(${slot})">${name || 'Filtro ' + slot}</button>`;
+  }).join('');
+  if (container.innerHTML !== chips) container.innerHTML = chips;
+}
+
+function renderRotator(r) {
+  const angle = parseFloat(r.angle) || 0;
+  const clamped = Math.max(-90, Math.min(90, angle));
+
+  // Badge
+  const rbadge = $('rot-state-badge');
+  if (rbadge) {
+    if (!r.connected)  { rbadge.textContent = 'Offline'; rbadge.className = 'sec-badge'; }
+    else if (r.moving) { rbadge.textContent = 'Girando'; rbadge.className = 'sec-badge busy'; }
+    else               { rbadge.textContent = (clamped >= 0 ? '+' : '') + clamped.toFixed(1) + '°'; rbadge.className = 'sec-badge ok'; }
+  }
+
+  setText('rot-angle', r.connected ? (clamped >= 0 ? '+' : '') + clamped.toFixed(1) : '--');
+
+  // Needle: range −90→+90 maps to 270°→90° (going through 0°/top)
+  // At 0°: needle points up (x2=40, y2=9)
+  // At +90°: needle points right; at -90°: needle points left
+  const needleAngleDeg = clamped; // degrees from top, clockwise
+  const needleRad = (needleAngleDeg - 90) * Math.PI / 180;
+  const nx = 40 + 31 * Math.cos(needleRad);
+  const ny = 40 + 31 * Math.sin(needleRad);
+  const needle = $('rot-needle');
+  if (needle) {
+    needle.setAttribute('x2', nx.toFixed(1));
+    needle.setAttribute('y2', ny.toFixed(1));
+  }
+
+  // Arc: full range 180°, circumference segment
+  // stroke-dasharray=213.6 is full circle (r=34)
+  // Half circle = 106.8; proportion of −90..+90 filled
+  const arc = $('rot-arc');
+  if (arc) {
+    // pct 0 = at -90, 1 = at +90
+    const pct    = (clamped + 90) / 180;
+    const filled = 106.8 * pct; // half-circle portion
+    // We use a semicircle dasharray trick: show only top half
+    arc.setAttribute('stroke-dasharray', `${filled.toFixed(1)} 213.6`);
+    arc.setAttribute('stroke-dashoffset', '53.4'); // start at left (-90°)
+  }
+
+  // Slider — don't update if user is dragging
+  const slider = $('rot-slider');
+  if (slider && slider !== document.activeElement) {
+    slider.value = clamped;
+    const pct = ((clamped + 90) / 180) * 100;
+    slider.style.setProperty('--rot-pct', pct + '%');
+  }
+}
+
+function renderCameraMini(c) {
+  const cbadge = $('cam-state-badge');
+  if (cbadge) {
+    if (!c.connected)            { cbadge.textContent = 'Offline';    cbadge.className = 'sec-badge'; }
+    else if (CAM.mode === 'framing')  { cbadge.textContent = 'Framing';   cbadge.className = 'sec-badge busy'; }
+    else if (CAM.mode === 'capturing'){ cbadge.textContent = 'Capturando';cbadge.className = 'sec-badge busy'; }
+    else                         { cbadge.textContent = 'Pronto';     cbadge.className = 'sec-badge ok'; }
+  }
+  // Preenche campos apenas se não estiver em foco
+  const expInp  = $('cam-exp');
+  const gainInp = $('cam-gain');
+  if (expInp  && expInp  !== document.activeElement && c.exposure != null) expInp.value  = c.exposure;
+  if (gainInp && gainInp !== document.activeElement && c.gain     != null) gainInp.value = c.gain;
 }
 
 function renderDrivers() {
@@ -214,8 +377,46 @@ function renderGotoStatus() {
 function setDot(id, on, warn) {
   const el = $('st-' + id);
   if (!el) return;
-  const dot = el.querySelector('.dot');
-  if (dot) dot.className = 'dot ' + (on ? 'dg' : warn ? 'da' : 'dx');
+  el.classList.toggle('active', !!on);
+  el.classList.toggle('warn',   !on && !!warn);
+  el.classList.toggle('error',  false);
+  // AP gets special class for blue colour
+  if (id === 'ap') el.classList.toggle('ap', !!on);
+}
+
+/* ══════════════════════════════════════════════
+   GPS SATELLITE INDICATOR
+   ══════════════════════════════════════════════ */
+
+function renderGpsSatIndicator() {
+  const gps  = STATE.devices.gps;
+  const sats = gps.sats || 0;
+  const fix  = gps.fix;
+  const el   = $('st-gps');
+  const cnt  = $('gps-sat-count');
+
+  if (!el) return;
+
+  // Icon-pill state
+  el.classList.remove('active','warn','error','ap');
+  if (fix && sats >= 4)  { el.classList.add('active'); }
+  else if (sats > 0)     { el.classList.add('warn'); }
+  // else: default grey
+
+  el.title = fix && sats >= 4
+    ? `GPS: fix (${sats} satélites)`
+    : sats > 0 ? `GPS: aguardando fix (${sats} sat)`
+    : 'GPS: sem sinal';
+
+  // Signal arcs: light up 1→2→3 based on sat count
+  const thresholds = [1, 3, 6];
+  thresholds.forEach((t, i) => {
+    const arc = $(`gps-dot-${i + 1}`);
+    if (arc) arc.style.opacity = sats >= t ? '1' : '0.15';
+  });
+
+  // Count badge
+  if (cnt) cnt.textContent = sats > 0 ? String(sats) : '';
 }
 
 /* ══════════════════════════════════════════════
@@ -378,6 +579,10 @@ function handleMsg(msg) {
       break;
     }
 
+    case 'camera_image':
+      onCameraImage(msg);
+      break;
+
     case 'log':
       addLog(msg.level, msg.text);
       break;
@@ -423,12 +628,20 @@ function connectSensors() {
     try {
       const d = JSON.parse(evt.data);
       if (typeof applyAlignData === 'function') applyAlignData(d);
-      setDot('gps', d.fix, !d.fix && (d.sats || 0) > 0);
+      // GPS state updated via device_update; also update from sensor bridge
+      if (d.sats != null) {
+        STATE.devices.gps.sats = d.sats;
+        STATE.devices.gps.fix  = !!d.fix;
+        renderGpsSatIndicator();
+      }
     } catch { }
   };
 
   sensorWs.onclose = () => {
     setDot('gps', false);
+    STATE.devices.gps.sats = 0;
+    STATE.devices.gps.fix = false;
+    renderGpsSatIndicator();
     if (typeof updateSensorBanner === 'function') updateSensorBanner(false);
     sensorBackoff = Math.min(sensorBackoff * 1.5, 30000);
     setTimeout(connectSensors, sensorBackoff);
@@ -456,6 +669,8 @@ function sw(id, el) {
   if (id === 'align') { if (typeof renderAlign === 'function') renderAlign(); }
   if (id === 'network') sendCmd({ type: 'network_status' }, false);
   if (id === 'drivers') sendCmd({ type: 'get_state' }, false);
+  // Pausa framing ao sair da aba de montagem
+  if (id !== 'mount' && CAM.mode === 'framing') _stopFraming();
 }
 
 /* ══════════════════════════════════════════════
@@ -602,8 +817,338 @@ function doGotoCoords() {
   sendCmd({ type: 'goto_coords', ra, dec });
 }
 
-function syncMount() { sendCmd({ type: 'sync' }); }
-function parkMount() { sendCmd({ type: 'park' }); }
+function syncMount()   { sendCmd({ type: 'sync' }); }
+function parkMount()   { sendCmd({ type: 'park' }); }
+function unparkMount() { sendCmd({ type: 'unpark' }); }
+
+function togglePark() {
+  if (STATE.devices.mount.parked) unparkMount();
+  else parkMount();
+}
+
+function slewHome() {
+  sendCmd({ type: 'slew_home' });
+}
+
+function meridianFlip() {
+  sendCmd({ type: 'meridian_flip' });
+}
+
+/* ── Focalizador ── */
+function focusMove(steps) {
+  sendCmd({ type: 'focus_move', steps });
+}
+function focusStop() {
+  sendCmd({ type: 'focus_stop' }, false);
+}
+function focusGoto() {
+  const pos = parseInt($('focus-abs-val')?.value);
+  if (isNaN(pos)) return;
+  sendCmd({ type: 'focus_goto', position: pos });
+}
+
+/* ── Filtros ── */
+function setFilter(slot) {
+  sendCmd({ type: 'filter_set', slot });
+  // Atualiza estado local imediatamente para feedback
+  STATE.devices.filterwheel.slot = slot;
+  const name = STATE.devices.filterwheel.filterNames?.[slot - 1] || null;
+  STATE.devices.filterwheel.filter = name;
+  scheduleRender();
+}
+
+/* ── Rotacionador ── */
+function rotSliderInput(val) {
+  const v = parseFloat(val);
+  STATE.devices.rotator.angle = v.toFixed(2);
+  renderRotator(STATE.devices.rotator);
+  // Update slider fill
+  const pct = ((v + 90) / 180) * 100;
+  const slider = $('rot-slider');
+  if (slider) slider.style.setProperty('--rot-pct', pct + '%');
+}
+
+function rotSliderCommit(val) {
+  clearTimeout(_rotCommitTimer);
+  _rotCommitTimer = setTimeout(() => rotGoto(parseFloat(val)), 150);
+}
+
+function rotGoto(angle) {
+  angle = parseFloat(angle);
+  if (isNaN(angle)) return;
+  angle = Math.max(-90, Math.min(90, angle));
+  sendCmd({ type: 'rotator_goto', angle });
+  const slider = $('rot-slider');
+  if (slider) {
+    slider.value = angle;
+    slider.style.setProperty('--rot-pct', (((angle + 90) / 180) * 100) + '%');
+  }
+}
+
+function rotGotoInput() {
+  const v = parseFloat($('rot-abs-val')?.value);
+  if (!isNaN(v)) rotGoto(v);
+}
+
+
+/* ── Câmera: render preview da imagem INDI BLOB ── */
+function renderCameraPreview(msg) {
+  const canvas  = $('cam-preview-canvas');
+  const holder  = $('cam-preview-placeholder');
+  if (!canvas) return;
+
+  // FITS: enviamos base64 raw — renderiza como escala de cinza simples
+  // JPEG/PNG: carrega direto via Image
+  if (msg.format === 'fits') {
+    _renderFitsPreview(msg.data, canvas, holder);
+  } else {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas.style.display = 'block';
+      if (holder) holder.style.display = 'none';
+    };
+    img.src = `data:image/${msg.format};base64,${msg.data}`;
+  }
+}
+
+function _renderFitsPreview(b64, canvas, holder) {
+  // Decodifica FITS básico: pula header de 2880 bytes, lê pixels 16-bit
+  try {
+    const bin  = atob(b64);
+    const buf  = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+
+    // Parse FITS header para NAXIS1, NAXIS2, BITPIX
+    const hdr   = new TextDecoder().decode(buf.slice(0, 2880));
+    const nx    = parseInt((hdr.match(/NAXIS1\s*=\s*(\d+)/) || [])[1]) || 0;
+    const ny    = parseInt((hdr.match(/NAXIS2\s*=\s*(\d+)/) || [])[1]) || 0;
+    const bpix  = parseInt((hdr.match(/BITPIX\s*=\s*([-\d]+)/) || [])[1]) || 16;
+    if (!nx || !ny) return;
+
+    // Número de blocos de header (cada bloco = 2880 bytes)
+    let hdrBlocks = 1;
+    for (let b = 0; b < 36; b++) {
+      const card = new TextDecoder().decode(buf.slice(b * 2880, (b + 1) * 2880));
+      if (card.includes('END ')) { hdrBlocks = b + 1; break; }
+    }
+    const dataOffset = hdrBlocks * 2880;
+    const bytesPerPix = Math.abs(bpix) / 8;
+    const total = nx * ny;
+
+    // Lê pixels e normaliza para 0-255
+    let mn = Infinity, mx = -Infinity;
+    const vals = new Float32Array(total);
+    const dv   = new DataView(buf.buffer, dataOffset);
+    for (let i = 0; i < total; i++) {
+      const off = i * bytesPerPix;
+      let v;
+      if (bpix === 16)       v = dv.getInt16(off, false);
+      else if (bpix === 8)   v = dv.getUint8(off);
+      else if (bpix === -32) v = dv.getFloat32(off, false);
+      else                   v = dv.getInt16(off, false);
+      vals[i] = v;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+
+    // Stretch simples (linear min-max com 0.1% clip)
+    const range = mx - mn || 1;
+    canvas.width = nx; canvas.height = ny;
+    const ctx  = canvas.getContext('2d');
+    const imgd = ctx.createImageData(nx, ny);
+    for (let i = 0; i < total; i++) {
+      const p = Math.round(((vals[i] - mn) / range) * 255);
+      imgd.data[i*4]   = p;
+      imgd.data[i*4+1] = p;
+      imgd.data[i*4+2] = p;
+      imgd.data[i*4+3] = 255;
+    }
+    ctx.putImageData(imgd, 0, 0);
+    canvas.style.display = 'block';
+    if (holder) holder.style.display = 'none';
+  } catch (e) {
+    console.warn('[FITS preview]', e.message);
+  }
+}
+
+
+/* ══════════════════════════════════════════════
+   CÂMERA — framing loop + single capture
+   ══════════════════════════════════════════════
+
+   Framing: loop de exposições curtas que atualiza
+   o preview a cada BLOB recebido, igual ao AsiAir.
+   O server já envia camera_image via WebSocket ao
+   receber setBLOBVector do INDI.
+
+   Modos:
+   - IDLE        → nada ativo
+   - FRAMING     → loop contínuo; cada BLOB recebido
+                   dispara nova exposição automaticamente
+   - CAPTURING   → exposição única; para ao receber BLOB
+   ══════════════════════════════════════════════ */
+
+const CAM = {
+  mode:      'idle',   // 'idle' | 'framing' | 'capturing'
+  expTimer:  null,
+  framingWatchdog: null,
+};
+
+/* Chamado pelo server quando chega um BLOB (camera_image) */
+function onCameraImage(msg) {
+  renderCameraPreview(msg);
+
+  if (CAM.mode === 'framing') {
+    // Dispara próxima exposição imediatamente
+    _shootFrame();
+  } else if (CAM.mode === 'capturing') {
+    CAM.mode = 'idle';
+    _stopExpBar();
+    _updateCamButtons();
+  }
+}
+
+/* ── Framing ── */
+function toggleFraming() {
+  if (CAM.mode === 'framing') {
+    _stopFraming();
+  } else {
+    // Para qualquer captura em andamento
+    if (CAM.mode === 'capturing') _stopCapture(false);
+    _startFraming();
+  }
+}
+
+function _startFraming() {
+  CAM.mode = 'framing';
+  _updateCamButtons();
+  _shootFrame();
+  // Watchdog: se em 30s não chegar BLOB, tenta de novo
+  _armFramingWatchdog();
+}
+
+function _stopFraming() {
+  CAM.mode = 'idle';
+  clearTimeout(CAM.framingWatchdog);
+  _stopExpBar();
+  sendCmd({ type: 'camera_abort' }, false);
+  _updateCamButtons();
+  // Remove overlay de framing
+  const ov = $('cam-framing-overlay');
+  if (ov) ov.style.display = 'none';
+}
+
+function _shootFrame() {
+  clearTimeout(CAM.framingWatchdog);
+  const exp  = parseFloat($('cam-exp')?.value)  || 1;
+  const gain = parseInt($('cam-gain')?.value)    || 100;
+  _startExpBar(exp);
+  sendCmd({ type: 'camera_capture', exposure: exp, gain });
+  _armFramingWatchdog(exp);
+  // Overlay
+  const ov    = $('cam-framing-overlay');
+  const label = $('cam-framing-label');
+  if (ov)    ov.style.display = 'flex';
+  if (label) label.textContent = `Framing  ${exp}s`;
+}
+
+function _armFramingWatchdog(exp) {
+  clearTimeout(CAM.framingWatchdog);
+  const timeout = ((exp || 1) + 8) * 1000; // exp + 8s de margem
+  CAM.framingWatchdog = setTimeout(() => {
+    if (CAM.mode === 'framing') _shootFrame(); // retry
+  }, timeout);
+}
+
+/* ── Single capture ── */
+function toggleCapture() {
+  if (CAM.mode === 'capturing') {
+    _stopCapture(true);
+  } else {
+    if (CAM.mode === 'framing') _stopFraming();
+    _startCapture();
+  }
+}
+
+function _startCapture() {
+  CAM.mode = 'capturing';
+  const exp  = parseFloat($('cam-exp')?.value)  || 1;
+  const gain = parseInt($('cam-gain')?.value)    || 100;
+  _startExpBar(exp);
+  _updateCamButtons();
+  sendCmd({ type: 'camera_capture', exposure: exp, gain });
+}
+
+function _stopCapture(sendAbort) {
+  CAM.mode = 'idle';
+  _stopExpBar();
+  _updateCamButtons();
+  if (sendAbort) sendCmd({ type: 'camera_abort' }, false);
+}
+
+/* ── Barra de progresso de exposição ── */
+function _startExpBar(duration) {
+  clearTimeout(CAM.expTimer);
+  const bar  = $('cam-exp-bar');
+  const prog = $('cam-exp-progress');
+  if (!bar || !prog) return;
+  bar.style.display = 'block';
+  prog.style.transition = 'none';
+  prog.style.width = '0%';
+  requestAnimationFrame(() => {
+    prog.style.transition = `width ${duration}s linear`;
+    prog.style.width = '100%';
+  });
+  CAM.expTimer = setTimeout(() => {
+    prog.style.transition = 'none';
+    prog.style.width = '0%';
+  }, duration * 1000 + 300);
+}
+
+function _stopExpBar() {
+  clearTimeout(CAM.expTimer);
+  const bar  = $('cam-exp-bar');
+  const prog = $('cam-exp-progress');
+  if (bar)  bar.style.display = 'none';
+  if (prog) { prog.style.transition = 'none'; prog.style.width = '0%'; }
+}
+
+/* ── Atualiza aparência dos botões ── */
+function _updateCamButtons() {
+  const fBtn  = $('cam-framing-btn');
+  const fTxt  = $('cam-framing-txt');
+  const fIco  = $('cam-framing-icon');
+  const cBtn  = $('cam-capture-btn');
+  const cTxt  = $('cam-capture-txt');
+  const cIco  = $('cam-capture-icon');
+
+  const isFraming   = CAM.mode === 'framing';
+  const isCapturing = CAM.mode === 'capturing';
+
+  // Framing button
+  if (fBtn) fBtn.classList.toggle('active', isFraming);
+  if (fTxt) fTxt.textContent = isFraming ? 'Parar' : 'Framing';
+  if (fIco) fIco.innerHTML   = isFraming
+    ? '<rect x="2" y="2" width="8" height="8" rx="1"/>'       // stop square
+    : '<polygon points="2,1 11,6 2,11"/>';                    // play triangle
+
+  // Capture button
+  if (cBtn) cBtn.classList.toggle('capturing', isCapturing);
+  if (cTxt) cTxt.textContent = isCapturing ? 'Parar' : 'Capturar';
+  if (cIco) cIco.innerHTML   = isCapturing
+    ? '<rect x="2" y="2" width="8" height="8" rx="1"/>'
+    : '<circle cx="6" cy="6" r="5"/>';
+
+  // Desabilita o outro botão durante operação
+  if (fBtn) fBtn.disabled = isCapturing;
+  if (cBtn) cBtn.disabled = isFraming;
+  if (fBtn) fBtn.style.opacity = isCapturing ? '.4' : '1';
+  if (cBtn) cBtn.style.opacity = isFraming   ? '.4' : '1';
+}
+
 
 /* ══════════════════════════════════════════════
    DRIVERS
@@ -727,14 +1272,487 @@ function _hideRotateHint(frameId) {
   }
 }
 
-function connectVNC(frameId, statusId, port) {
-  const frame = $(frameId);
-  const status = $(statusId);
+/* ══════════════════════════════════════════════
+   GPS SATELLITE INDICATOR
+   ══════════════════════════════════════════════ */
+
+function renderGpsSatIndicator() {
+  const gps   = STATE.devices.gps;
+  const sats  = gps.sats || 0;
+  const fix   = gps.fix;
+  const el    = document.getElementById('st-gps');
+  const cnt   = document.getElementById('gps-sat-count');
+  const svg   = document.getElementById('gps-sat-svg');
+
+  if (!el) return;
+
+  // Color: green = fix + sats>=4, amber = some sats no fix, red = no sats
+  let color, title;
+  if (fix && sats >= 4) {
+    color = 'var(--green)';   title = `GPS: fix (${sats} satélites)`;
+  } else if (sats > 0) {
+    color = 'var(--amber)';   title = `GPS: sem fix (${sats} satélite${sats>1?'s':''})`;
+  } else {
+    color = 'var(--dim)';     title = 'GPS: sem sinal';
+  }
+
+  el.style.color = color;
+  el.title = title;
+
+  // Animate signal dots based on sat count (0-3 dots active)
+  const thresholds = [1, 3, 6];
+  thresholds.forEach((t, i) => {
+    const dot = document.getElementById(`gps-dot-${i+1}`);
+    if (dot) dot.style.opacity = sats >= t ? '1' : '0.18';
+  });
+
+  // Satellite count badge
+  if (cnt) {
+    cnt.textContent = sats > 0 ? sats : '';
+    cnt.style.color = color;
+  }
+}
+
+/* ══════════════════════════════════════════════
+   XPRA — Dynamic resize + touch layer
+   ══════════════════════════════════════════════
+
+   Arquitetura:
+   ┌─ .novnc-frame (frameId) ──────────────────┐
+   │  ┌─ .xpra-touch-layer ──────────────────┐ │
+   │  │  (captura touch, aplica transform)   │ │
+   │  │  ┌─ iframe (Xpra HTML5 client) ───┐  │ │
+   │  │  │  sessão remota escalada        │  │ │
+   │  │  └────────────────────────────────┘  │ │
+   │  └──────────────────────────────────────┘ │
+   └───────────────────────────────────────────┘
+
+   Gestos suportados:
+   - Tap simples         → clique esquerdo
+   - Tap duplo           → clique duplo
+   - Tap longo (500ms)   → clique direito
+   - 2 dedos pinch       → zoom (scale do iframe)
+   - 2 dedos pan         → scroll (wheel events)
+   - 1 dedo pan (após tap) → move mouse remoto
+   ══════════════════════════════════════════════ */
+
+/* Registro de sessões Xpra ativas: frameId → { port, statusId, auth, resizeTimer, observer } */
+const XPRA_SESSIONS = new Map();
+
+/**
+ * Mede as dimensões reais do container do frame no momento da chamada.
+ * Usa o elemento pai (.novnc-frame) para pegar a área disponível real.
+ */
+function getDisplayParams(containerEl) {
+  const dpr  = window.devicePixelRatio || 1;
+  const rect = containerEl
+    ? containerEl.getBoundingClientRect()
+    : { width: window.innerWidth, height: window.innerHeight };
+
+  const w   = Math.round(rect.width  * dpr);
+  const h   = Math.round(rect.height * dpr);
+  const dpi = Math.round(96 * dpr);
+  return { w: Math.max(w, 320), h: Math.max(h, 240), dpi };
+}
+
+/** Monta URLSearchParams para o Xpra HTML5 client */
+function _xpraParams(port, w, h, dpi, extraParams) {
+  return new URLSearchParams({
+    host:              WS_HOST,
+    port:              String(port),
+    ssl:               '0',
+    autoconnect:       '1',
+    reconnect:         '1',
+    encoding:          'auto',
+    dpi:               String(dpi),
+    desktop_size:      `${w}x${h}`,
+    resize:            '1',          // aceita resize dinâmico
+    keyboard:          'pt-br',
+    clipboard:         '1',
+    swap_keys:         '0',
+    printing:          '0',
+    open_files:        '0',
+    start_new_session: '0',
+    ...extraParams,
+  });
+}
+
+/**
+ * Injeta o iframe Xpra dentro de uma camada de touch.
+ * Retorna o wrapper criado.
+ */
+function _injectXpraIframe(frame, url) {
+  // Remove conteúdo anterior
+  frame.innerHTML = '';
+
+  // Wrapper que recebe os gestos touch
+  const layer = document.createElement('div');
+  layer.className = 'xpra-touch-layer';
+
+  // Badge de zoom (aparece brevemente ao fazer pinch)
+  const badge = document.createElement('div');
+  badge.className = 'xpra-zoom-badge';
+  badge.textContent = '1×';
+  layer.appendChild(badge);
+
+  const iframe = document.createElement('iframe');
+  iframe.src = url;
+  iframe.style.cssText = 'width:100%;height:100%;border:none;background:#000;display:block;';
+  iframe.allow = 'fullscreen clipboard-read clipboard-write';
+
+  layer.appendChild(iframe);
+  frame.appendChild(layer);
+
+  return { layer, iframe };
+}
+
+/**
+ * Conecta (ou reconecta) uma sessão Xpra.
+ * Registra observers para resize automático.
+ */
+function connectXpra(frameId, statusId, port, extraParams) {
+  const frame  = document.getElementById(frameId);
+  const status = document.getElementById(statusId);
   if (!frame) return;
-  // Adicionado &cursor=false para mobile e &autoconnect=1
-  const url = `http://${WS_HOST}:${port}/vnc.html?autoconnect=1&reconnect=1&resize=scale&cursor=false`;
-  frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
+
+  _hideRotateHint(frameId);
+
+  // Cancela observer anterior se existir
+  const prev = XPRA_SESSIONS.get(frameId);
+  if (prev?.observer) prev.observer.disconnect();
+  if (prev?.resizeTimer) clearTimeout(prev.resizeTimer);
+
+  const { w, h, dpi } = getDisplayParams(frame);
+  const params = _xpraParams(port, w, h, dpi, extraParams || {});
+  const url    = `http://${WS_HOST}:${port}/?${params.toString()}`;
+
+  const { layer } = _injectXpraIframe(frame, url);
   if (status) status.textContent = 'Conectado';
+
+  // Salva sessão
+  const session = { port, statusId, extraParams: extraParams || {}, lastW: w, lastH: h };
+  XPRA_SESSIONS.set(frameId, session);
+
+  // Instala touch layer
+  _installTouchLayer(layer, frame);
+
+  // Observer de resize do container
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(() => _onXpraContainerResize(frameId));
+    observer.observe(frame);
+    session.observer = observer;
+  }
+
+  // Fallback: também ouve orientationchange e resize de janela
+  // (já registrado globalmente no init, veja _xpraGlobalResizeInit)
+}
+
+/**
+ * Chamado pelo ResizeObserver ou pelo evento de orientação.
+ * Reconecta apenas se a mudança de tamanho for significativa (>5%).
+ */
+function _onXpraContainerResize(frameId) {
+  const session = XPRA_SESSIONS.get(frameId);
+  if (!session) return;
+
+  clearTimeout(session.resizeTimer);
+  session.resizeTimer = setTimeout(() => {
+    const frame = document.getElementById(frameId);
+    if (!frame || !frame.querySelector('iframe')) return;
+
+    // Só reconecta se o painel estiver visível
+    const panel = frame.closest('.panel');
+    if (panel && !panel.classList.contains('active')) return;
+
+    const { w, h, dpi } = getDisplayParams(frame);
+
+    // Threshold: ignora mudanças menores que 5%
+    const dw = Math.abs(w - session.lastW) / session.lastW;
+    const dh = Math.abs(h - session.lastH) / session.lastH;
+    if (dw < 0.05 && dh < 0.05) return;
+
+    session.lastW = w;
+    session.lastH = h;
+
+    // Reconecta com novas dimensões
+    const params  = _xpraParams(session.port, w, h, dpi, session.extraParams);
+    const url     = `http://${WS_HOST}:${session.port}/?${params.toString()}`;
+    const { layer } = _injectXpraIframe(frame, url);
+    _installTouchLayer(layer, frame);
+
+    const status = document.getElementById(session.statusId);
+    if (status) status.textContent = 'Conectado';
+  }, 400); // debounce 400ms
+}
+
+/** Registra listeners globais de resize/orientation uma única vez */
+function _xpraGlobalResizeInit() {
+  let lastOrientation = screen.orientation?.type || '';
+
+  const onOrientationChange = () => {
+    const newOrientation = screen.orientation?.type || '';
+    if (newOrientation === lastOrientation) return;
+    lastOrientation = newOrientation;
+    // Reconecta todos os painéis Xpra visíveis
+    XPRA_SESSIONS.forEach((_, frameId) => _onXpraContainerResize(frameId));
+  };
+
+  screen.orientation?.addEventListener('change', onOrientationChange);
+  window.addEventListener('orientationchange', onOrientationChange);
+
+  // resize de janela (desktop / tablet split-screen)
+  let winResizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(winResizeTimer);
+    winResizeTimer = setTimeout(() => {
+      XPRA_SESSIONS.forEach((_, frameId) => _onXpraContainerResize(frameId));
+    }, 300);
+  });
+}
+
+/* ──────────────────────────────────────────────
+   TOUCH LAYER — gestos sobre o iframe Xpra
+   ────────────────────────────────────────────── */
+
+/**
+ * Instala o handler de gestos na camada de touch.
+ *
+ * Gestos → ações:
+ *  tap (< 250ms, < 10px)       → mousedown + mouseup (click)
+ *  double tap (< 300ms entre)  → dblclick
+ *  long press (≥ 500ms)        → contextmenu (botão direito)
+ *  1 dedo pan                  → mousemove (move cursor remoto)
+ *  2 dedos pinch               → zoom (CSS scale no iframe)
+ *  2 dedos pan                 → scroll wheel no iframe
+ *
+ * Estratégia: a touch-layer fica sobre o iframe com pointer-events:none
+ * no iframe. Os eventos são traduzidos para mouse events sintéticos
+ * despachados sobre o iframe (que o Xpra HTML5 client processa).
+ */
+function _installTouchLayer(layer, frame) {
+  // Remove listeners anteriores clonando o elemento
+  const fresh = layer.cloneNode(true);
+  layer.parentNode?.replaceChild(fresh, layer);
+  layer = fresh;
+
+  // O iframe dentro da layer
+  const iframe = layer.querySelector('iframe');
+  if (!iframe) return;
+
+  // Variáveis de estado de gesto
+  let touches        = {};     // id → {x,y}
+  let tapTimer       = null;
+  let longPressTimer = null;
+  let lastTapTime    = 0;
+  let lastTapPos     = { x: 0, y: 0 };
+  let panStartX      = 0, panStartY = 0;
+  let isPanning      = false;
+  let pinchStartDist = 0;
+  let currentScale   = 1;
+  let pinchActive    = false;
+
+  // Clamp scale entre 0.5× e 4×
+  const SCALE_MIN = 0.5, SCALE_MAX = 4.0;
+
+  function getPos(touch, el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: (touch.clientX - rect.left) / currentScale,
+      y: (touch.clientY - rect.top)  / currentScale,
+    };
+  }
+
+  function dist2(t1, t2) {
+    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  }
+
+  function midpoint(t1, t2) {
+    return {
+      x: (t1.clientX + t2.clientX) / 2,
+      y: (t1.clientY + t2.clientY) / 2,
+    };
+  }
+
+  /** Despacha evento de mouse sintético no documento do iframe */
+  function sendMouseEvent(type, x, y, button) {
+    try {
+      const iDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!iDoc) return;
+      const el = iDoc.elementFromPoint(x, y) || iDoc.body;
+      el?.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true,
+        clientX: x, clientY: y,
+        screenX: x, screenY: y,
+        button: button || 0, buttons: type === 'mousedown' ? 1 : 0,
+        view: iframe.contentWindow,
+      }));
+    } catch { /* cross-origin — Xpra usa mesmo host, mas pode falhar */ }
+  }
+
+  /** Despacha wheel event (scroll) no iframe */
+  function sendWheelEvent(x, y, deltaX, deltaY) {
+    try {
+      const iDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!iDoc) return;
+      const el = iDoc.elementFromPoint(x, y) || iDoc.body;
+      el?.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true, cancelable: true,
+        clientX: x, clientY: y,
+        deltaX, deltaY, deltaMode: 0,
+        view: iframe.contentWindow,
+      }));
+    } catch { }
+  }
+
+  let zoomBadgeTimer = null;
+  function applyScale(scale) {
+    currentScale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, scale));
+    iframe.style.transform       = `scale(${currentScale})`;
+    iframe.style.transformOrigin = '0 0';
+    iframe.style.width           = `${100 / currentScale}%`;
+    iframe.style.height          = `${100 / currentScale}%`;
+    // Atualiza badge de zoom
+    const badge = layer.querySelector('.xpra-zoom-badge');
+    if (badge) {
+      badge.textContent = `${currentScale.toFixed(1)}×`;
+      badge.classList.add('visible');
+      clearTimeout(zoomBadgeTimer);
+      zoomBadgeTimer = setTimeout(() => badge.classList.remove('visible'), 1200);
+    }
+  }
+
+  // ── touchstart ─────────────────────────────────────────────────────────
+  layer.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    Array.from(e.changedTouches).forEach(t => {
+      touches[t.identifier] = { x: t.clientX, y: t.clientY, startX: t.clientX, startY: t.clientY };
+    });
+
+    const ids = Object.keys(touches);
+
+    if (ids.length === 1) {
+      const t = e.changedTouches[0];
+      panStartX = t.clientX;
+      panStartY = t.clientY;
+      isPanning = false;
+      pinchActive = false;
+
+      // Long press → botão direito
+      longPressTimer = setTimeout(() => {
+        const pos = getPos(t, layer);
+        sendMouseEvent('contextmenu', pos.x, pos.y, 2);
+        // Feedback visual
+        layer.classList.add('xpra-rightclick-flash');
+        setTimeout(() => layer.classList.remove('xpra-rightclick-flash'), 200);
+      }, 500);
+
+    } else if (ids.length === 2) {
+      clearTimeout(longPressTimer);
+      const tArr = e.touches;
+      pinchStartDist = dist2(tArr[0], tArr[1]);
+      pinchActive = true;
+    }
+  }, { passive: false });
+
+  // ── touchmove ──────────────────────────────────────────────────────────
+  layer.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    Array.from(e.changedTouches).forEach(t => {
+      if (touches[t.identifier]) {
+        touches[t.identifier].x = t.clientX;
+        touches[t.identifier].y = t.clientY;
+      }
+    });
+
+    const tArr = e.touches;
+
+    if (tArr.length === 2 && pinchActive) {
+      clearTimeout(longPressTimer);
+      // Pinch → zoom
+      const newDist  = dist2(tArr[0], tArr[1]);
+      const scaleDelta = newDist / pinchStartDist;
+      applyScale(currentScale * scaleDelta);
+      pinchStartDist = newDist;
+
+      // 2 dedos pan → scroll
+      const mid = midpoint(tArr[0], tArr[1]);
+      const pos = getPos({ clientX: mid.x, clientY: mid.y }, layer);
+      const dx = tArr[0].clientX - (touches[tArr[0].identifier]?.startX || tArr[0].clientX);
+      const dy = tArr[0].clientY - (touches[tArr[0].identifier]?.startY || tArr[0].clientY);
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        sendWheelEvent(pos.x, pos.y, -dx * 2, -dy * 2);
+      }
+
+    } else if (tArr.length === 1 && !pinchActive) {
+      const t = tArr[0];
+      const dx = t.clientX - panStartX;
+      const dy = t.clientY - panStartY;
+
+      if (!isPanning && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+        isPanning = true;
+        clearTimeout(longPressTimer);
+      }
+
+      if (isPanning) {
+        const pos = getPos(t, layer);
+        sendMouseEvent('mousemove', pos.x, pos.y);
+        panStartX = t.clientX;
+        panStartY = t.clientY;
+      }
+    }
+  }, { passive: false });
+
+  // ── touchend ───────────────────────────────────────────────────────────
+  layer.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    clearTimeout(longPressTimer);
+
+    const ended = Array.from(e.changedTouches);
+    const wasOneTouch = Object.keys(touches).length === 1;
+
+    ended.forEach(t => { delete touches[t.identifier]; });
+
+    const remaining = Object.keys(touches).length;
+    if (remaining === 0) pinchActive = false;
+
+    if (!isPanning && wasOneTouch && ended.length === 1) {
+      const t = ended[0];
+      const pos = getPos(t, layer);
+
+      const now = Date.now();
+      const dtap = now - lastTapTime;
+      const dpx  = Math.hypot(t.clientX - lastTapPos.x, t.clientY - lastTapPos.y);
+
+      if (dtap < 300 && dpx < 30) {
+        // Double tap → zoom reset ou dblclick
+        if (currentScale !== 1) {
+          applyScale(1);
+        } else {
+          sendMouseEvent('dblclick', pos.x, pos.y);
+        }
+        lastTapTime = 0;
+      } else {
+        // Single tap → click
+        sendMouseEvent('mousedown', pos.x, pos.y);
+        setTimeout(() => sendMouseEvent('mouseup', pos.x, pos.y), 60);
+        lastTapTime = now;
+        lastTapPos  = { x: t.clientX, y: t.clientY };
+      }
+    }
+
+    isPanning = false;
+  }, { passive: false });
+
+  layer.addEventListener('touchcancel', (e) => {
+    clearTimeout(longPressTimer);
+    Array.from(e.changedTouches).forEach(t => delete touches[t.identifier]);
+    isPanning = false; pinchActive = false;
+  }, { passive: false });
+}
+
+function connectVNC(frameId, statusId, port) {
+  // Alias mantido por compatibilidade — redireciona para Xpra
+  connectXpra(frameId, statusId, port);
 }
 
 function showAuth(type) {
@@ -767,13 +1785,14 @@ async function doAuth(type) {
     }
 
   } else if (type === 'desktop') {
+    const user   = ($('user-desktop')?.value || '').trim() || 'samu192';
     const pwd    = $('pwd-desktop')?.value || '';
-    if (!pwd) { if (errEl) errEl.textContent = 'Digite a senha VNC.'; return; }
-    const frame  = $('vnc-d-frame');
-    const status = $('vnc-d-status');
-    const url = `http://${WS_HOST}:6082/vnc.html?autoconnect=1&reconnect=1&resize=scale&cursor=false&password=${encodeURIComponent(pwd)}`;
-frame.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
-    if (status) status.textContent = 'Conectado';
+    if (!pwd) { if (errEl) errEl.textContent = 'Digite a senha.'; return; }
+    connectXpra('vnc-d-frame', 'vnc-d-status', 6082, {
+      username: user,
+      password: pwd,
+      sharing:  '0',
+    });
     _hideRotateHint('vnc-d-frame');
   }
 }
@@ -904,3 +1923,4 @@ connectWS();
 connectSensors();
 requestAnimationFrame(tickClock);
 scheduleRender();
+_xpraGlobalResizeInit();

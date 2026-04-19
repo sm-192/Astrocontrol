@@ -47,7 +47,7 @@ const DEVICE_STATE = {
     ra: null, dec: null, ra_raw: null, dec_raw: null,
     alt: null, az: null,
     tracking: null, parked: false, slewing: false,
-    slewRate: null,
+    slewRate: null, pierSide: null,
   },
   camera: {
     connected: false, state: 'disconnected',
@@ -342,6 +342,14 @@ function parseIndiMessage(xml, tag, session) {
           `${device || key} ${connected ? 'conectado' : 'desconectado'}`);
       }
 
+      if (name === 'TELESCOPE_PIER_SIDE' && key === 'mount') {
+        const side = switches['PIER_WEST'] ? 'W' : switches['PIER_EAST'] ? 'E' : null;
+        if (side) {
+          patchDevice('mount', { pierSide: side });
+          emit(ws, 'device_update', { key: 'mount', data: DEVICE_STATE.mount });
+        }
+      }
+
       if (name === 'TELESCOPE_PARK' && key === 'mount') {
         const parked = switches['PARK'] === true;
         patchDevice('mount', {
@@ -431,6 +439,31 @@ function parseIndiMessage(xml, tag, session) {
       if (state === 'Alert') {
         log(ws, 'er', `${device || '?'}/${name || '?'}: Alert`);
       }
+      break;
+    }
+
+    /* ── BLOB — imagem da câmera ── */
+    case 'setBLOBVector': {
+      if (key !== 'camera') break;
+      // Extrai o elemento oneBlob
+      const blobMatch = xml.match(/<oneBlob[^>]+name=["']CCD1["'][^>]*>([\s\S]*?)<\/oneBlob>/i)
+                     || xml.match(/<oneBlob[^>]*>([\s\S]*?)<\/oneBlob>/i);
+      if (!blobMatch) break;
+      const raw    = blobMatch[1].replace(/\s/g, '');
+      const fmAttr = xAttr(xml, 'format') || xAttr(blobMatch[0], 'format') || '.fits';
+      const fmt    = fmAttr.replace('.','').toLowerCase();
+      if (!raw || raw.length < 100) break;
+
+      // Para FITS: envia os bytes em base64 para o frontend converter
+      // Para JPEG/PNG: envia direto
+      const sendFmt = (fmt === 'jpg' || fmt === 'jpeg' || fmt === 'png') ? fmt : 'fits';
+      emit(ws, 'camera_image', {
+        data:   raw,
+        format: sendFmt,
+        device: device || '',
+      });
+      patchDevice('camera', { capturing: false });
+      emit(ws, 'device_update', { key: 'camera', data: DEVICE_STATE.camera });
       break;
     }
 
@@ -628,6 +661,8 @@ function createIndiConn(session) {
     emit(session.ws, 'indi_status', { connected: true });
     log(session.ws, 'ok', `indiserver :${CFG.INDI_PORT}`);
     socket.write('<getProperties version="1.7"/>\n');
+    // Habilita recepção de BLOBs da câmera (imagens capturadas)
+    socket.write('<enableBLOB>Also</enableBLOB>\n');
     flushQueue(session);
   });
 
@@ -780,9 +815,114 @@ function indiTracking(session, mode) {
   }
 }
 
-/* ══════════════════════════════════════════════
-   RESOLUÇÃO DE NOMES — Sesame CDS
-   ══════════════════════════════════════════════ */
+function indiSlewHome(session) {
+  indiWrite(session,
+    `<newSwitchVector device="${mountDev()}" name="TELESCOPE_HOME">` +
+    `<oneSwitch name="GoHome">On</oneSwitch>` +
+    `</newSwitchVector>`);
+}
+
+function indiMeridianFlip(session) {
+  indiWrite(session,
+    `<newSwitchVector device="${mountDev()}" name="TELESCOPE_MERIDIAN_FLIP">` +
+    `<oneSwitch name="FLIP_NOW">On</oneSwitch>` +
+    `</newSwitchVector>`);
+}
+
+/* ── Focalizador ── */
+function focuserDev() {
+  for (const [name, key] of KNOWN_DEVICES) { if (key === 'focuser') return name; }
+  return 'Focuser Simulator';
+}
+
+function indiFocusMove(session, steps) {
+  const dev = focuserDev();
+  const dir = steps >= 0 ? 'FOCUS_OUTWARD' : 'FOCUS_INWARD';
+  const abs = Math.abs(steps);
+  // Seta direção
+  indiWrite(session,
+    `<newSwitchVector device="${dev}" name="FOCUS_MOTION">` +
+    `<oneSwitch name="${dir}">On</oneSwitch>` +
+    `</newSwitchVector>`);
+  // Seta passos relativos
+  indiWrite(session,
+    `<newNumberVector device="${dev}" name="REL_FOCUS_POSITION">` +
+    `<oneNumber name="FOCUS_RELATIVE_POSITION">${abs}</oneNumber>` +
+    `</newNumberVector>`);
+}
+
+function indiFocusStop(session) {
+  indiWrite(session,
+    `<newSwitchVector device="${focuserDev()}" name="FOCUS_ABORT_MOTION">` +
+    `<oneSwitch name="ABORT">On</oneSwitch>` +
+    `</newSwitchVector>`);
+}
+
+function indiFocusGoto(session, pos) {
+  indiWrite(session,
+    `<newNumberVector device="${focuserDev()}" name="ABS_FOCUS_POSITION">` +
+    `<oneNumber name="FOCUS_ABSOLUTE_POSITION">${Math.round(pos)}</oneNumber>` +
+    `</newNumberVector>`);
+}
+
+/* ── Roda de filtros ── */
+function filterwheelDev() {
+  for (const [name, key] of KNOWN_DEVICES) { if (key === 'filterwheel') return name; }
+  return 'Filter Wheel Simulator';
+}
+
+function indiFilterSet(session, slot) {
+  indiWrite(session,
+    `<newNumberVector device="${filterwheelDev()}" name="FILTER_SLOT">` +
+    `<oneNumber name="FILTER_SLOT_VALUE">${slot}</oneNumber>` +
+    `</newNumberVector>`);
+}
+
+/* ── Rotacionador ── */
+function rotatorDev() {
+  for (const [name, key] of KNOWN_DEVICES) { if (key === 'rotator') return name; }
+  return 'Rotator Simulator';
+}
+
+function indiRotatorGoto(session, angle) {
+  indiWrite(session,
+    `<newNumberVector device="${rotatorDev()}" name="ABS_ROTATOR_ANGLE">` +
+    `<oneNumber name="ANGLE">${parseFloat(angle).toFixed(2)}</oneNumber>` +
+    `</newNumberVector>`);
+}
+
+/* ── Câmera ── */
+function cameraDev() {
+  for (const [name, key] of KNOWN_DEVICES) { if (key === 'camera') return name; }
+  return 'CCD Simulator';
+}
+
+function indiCameraCapture(session, exposure, gain) {
+  const dev = cameraDev();
+  // Seta ganho se fornecido
+  if (gain != null) {
+    indiWrite(session,
+      `<newNumberVector device="${dev}" name="CCD_GAIN">` +
+      `<oneNumber name="GAIN">${gain}</oneNumber>` +
+      `</newNumberVector>`);
+  }
+  // Seta exposição (isso dispara a captura)
+  indiWrite(session,
+    `<newNumberVector device="${dev}" name="CCD_EXPOSURE">` +
+    `<oneNumber name="CCD_EXPOSURE_VALUE">${parseFloat(exposure).toFixed(3)}</oneNumber>` +
+    `</newNumberVector>`);
+  patchDevice('camera', { capturing: true });
+}
+
+function indiCameraAbort(session) {
+  indiWrite(session,
+    `<newSwitchVector device="${cameraDev()}" name="CCD_ABORT_EXPOSURE">` +
+    `<oneSwitch name="ABORT">On</oneSwitch>` +
+    `</newSwitchVector>`);
+  patchDevice('camera', { capturing: false });
+}
+
+
 
 function resolveObject(name) {
   return new Promise((resolve, reject) => {
@@ -838,6 +978,15 @@ function handleMsg(session, msg) {
     case 'sync':          indiSync(session);  emit(ws,'goto_result',{success:true,message:'Sync enviado'}); break;
     case 'park':          indiPark(session,true);  emit(ws,'goto_result',{success:true,message:'Park enviado'}); break;
     case 'unpark':        indiPark(session,false); break;
+    case 'slew_home':     indiSlewHome(session); break;
+    case 'meridian_flip': indiMeridianFlip(session); break;
+    case 'focus_move':    indiFocusMove(session, msg.steps); break;
+    case 'focus_stop':    indiFocusStop(session); break;
+    case 'focus_goto':    indiFocusGoto(session, msg.position); break;
+    case 'filter_set':    indiFilterSet(session, msg.slot); break;
+    case 'rotator_goto':  indiRotatorGoto(session, msg.angle); break;
+    case 'camera_capture':indiCameraCapture(session, msg.exposure, msg.gain); break;
+    case 'camera_abort':  indiCameraAbort(session); break;
     case 'driver_start':  startDriver(session, msg.driver, msg.port); break;
     case 'driver_stop':   stopDriver(ws, msg.driver);  break;
     case 'ap_toggle':     toggleAP(ws, msg.enable);    break;
