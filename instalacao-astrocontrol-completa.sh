@@ -65,34 +65,12 @@ fi
 print_success "Node.js $(node -v)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-print_header "PASSO 3: INDI + KStars + PHD2"
-apt install -y -qq apt-transport-https ca-certificates gnupg
-wget -qO /tmp/indi.key https://www.indilib.org/jdownloads/Ubuntu/indi.key
-gpg --dearmor < /tmp/indi.key > /usr/share/keyrings/indi.gpg
-echo "deb [signed-by=/usr/share/keyrings/indi.gpg] https://www.indilib.org/jdownloads/Ubuntu bookworm main" \
-    > /etc/apt/sources.list.d/indi.list
-apt update -qq
-apt install -y -qq indi-full indi-web || print_error "INDI falhou (continuando)"
-apt install -y -qq kstars-bleeding || apt install -y -qq kstars || print_error "KStars falhou"
-apt install -y -qq phd2 || print_error "PHD2 falhou"
-print_success "INDI/KStars/PHD2 processados"
-
 # ═══════════════════════════════════════════════════════════════════════════
 print_header "PASSO 4: Xpra (substitui VNC + noVNC)"
 
-print_step "Adicionando repositório Xpra..."
-wget -qO /usr/share/keyrings/xpra.asc https://xpra.org/xpra.asc
-cat > /etc/apt/sources.list.d/xpra.list << 'EOF'
-deb [signed-by=/usr/share/keyrings/xpra.asc] https://xpra.org/dists/bookworm/ ./
-EOF
-apt update -qq
+print_step "Xpra já detectado: $(xpra --version 2>&1 | head -1)"
 
-print_step "Instalando xpra + xpra-html5..."
-apt install -y -qq xpra xpra-html5 python3-xpra \
-    || { print_error "Falha ao instalar Xpra"; exit 1; }
-print_success "Xpra $(xpra --version 2>&1 | head -1)"
-
-# Configuração global
+# Configuração global do Xpra
 mkdir -p /etc/xpra /var/log/xpra
 chown "${ASTRO_USER}:${ASTRO_USER}" /var/log/xpra
 
@@ -110,6 +88,69 @@ bind-tcp = 0.0.0.0
 log-dir = /var/log/xpra
 EOF
 
+# ─── xpra-html5: configuração para funcionar em iframe ─────────────────────
+# O Xpra HTML5 pode servir headers X-Frame-Options que bloqueiam iframes.
+# Precisamos remover isso para o AstroControl PWA poder embutir as sessões.
+
+# Detecta onde o xpra-html5 instala os arquivos web
+XPRA_HTML5_DIR=""
+for DIR in /usr/share/xpra/www /usr/share/xpra-html5 \
+           /usr/lib/python3/dist-packages/xpra/client/html5/www \
+           /opt/xpra/www; do
+    if [ -f "${DIR}/index.html" ]; then
+        XPRA_HTML5_DIR="${DIR}"
+        break
+    fi
+done
+
+if [ -n "${XPRA_HTML5_DIR}" ]; then
+    print_step "Configurando xpra-html5 em ${XPRA_HTML5_DIR}..."
+
+    # Remove X-Frame-Options do index.html se presente como meta tag
+    sed -i '/X-Frame-Options/d' "${XPRA_HTML5_DIR}/index.html" 2>/dev/null || true
+
+    # Patch no servidor Python do Xpra para remover o header X-Frame-Options
+    # O arquivo que serve os headers HTTP do cliente HTML5
+    for PYFILE in \
+        /usr/lib/python3/dist-packages/xpra/server/websocket.py \
+        /usr/lib/python3/dist-packages/xpra/net/websockets/handler.py \
+        /usr/lib/python3/dist-packages/xpra/server/http_handler.py; do
+        if [ -f "${PYFILE}" ]; then
+            sed -i 's/X-Frame-Options.*SAMEORIGIN/X-Frame-Options: ALLOWALL/g' "${PYFILE}" 2>/dev/null || true
+            sed -i 's/"X-Frame-Options".*"SAMEORIGIN"/"X-Frame-Options": "ALLOWALL"/g' "${PYFILE}" 2>/dev/null || true
+            print_success "Patched: $(basename ${PYFILE})"
+        fi
+    done
+
+    # Cria settings.js com defaults para o cliente HTML5
+    cat > "${XPRA_HTML5_DIR}/settings.js" << 'EOF'
+// AstroControl — xpra-html5 default settings
+(function() {
+  var defaults = {
+    "server"        : window.location.hostname,
+    "ssl"           : false,
+    "encoding"      : "auto",
+    "autoreconnect" : true,
+    "clipboard"     : true,
+    "notifications" : false,
+    "bell"          : false,
+    "language"      : "pt-br",
+    "sharing"       : false,
+    "floating_menu" : false,
+    "toolbar"       : false,
+  };
+  // Aplica defaults apenas se não definidos via hash
+  if (typeof XPRA_SETTINGS === "undefined") window.XPRA_SETTINGS = {};
+  Object.keys(defaults).forEach(function(k) {
+    if (!(k in window.XPRA_SETTINGS)) window.XPRA_SETTINGS[k] = defaults[k];
+  });
+})();
+EOF
+    print_success "xpra-html5 configurado em ${XPRA_HTML5_DIR}"
+else
+    print_error "xpra-html5 dir não encontrado — configure manualmente"
+fi
+
 # ─── xpra-kstars.service ────────────────────────────────────────────────────
 cat > /etc/systemd/system/xpra-kstars.service << EOF
 [Unit]
@@ -123,12 +164,16 @@ Environment=HOME=/home/${ASTRO_USER}
 ExecStart=/usr/bin/xpra start :1 \
     --bind-tcp=0.0.0.0:6080 \
     --html=on \
+    --tcp-auth=none \
     --encoding=auto \
     --dpi=auto \
-    --start=kstars \
+    --start-child=kstars \
     --exit-with-children=no \
     --sharing=yes \
     --daemon=no \
+    --notifications=no \
+    --bell=no \
+    --systemd-run=no \
     --log-file=/var/log/xpra/kstars.log
 Restart=on-failure
 RestartSec=10
@@ -150,12 +195,16 @@ Environment=HOME=/home/${ASTRO_USER}
 ExecStart=/usr/bin/xpra start :2 \
     --bind-tcp=0.0.0.0:6081 \
     --html=on \
+    --tcp-auth=none \
     --encoding=auto \
     --dpi=auto \
-    --start=phd2 \
+    --start-child=phd2 \
     --exit-with-children=no \
     --sharing=yes \
     --daemon=no \
+    --notifications=no \
+    --bell=no \
+    --systemd-run=no \
     --log-file=/var/log/xpra/phd2.log
 Restart=on-failure
 RestartSec=10
@@ -177,13 +226,16 @@ Environment=HOME=/home/${ASTRO_USER}
 ExecStart=/usr/bin/xpra start-desktop :3 \
     --bind-tcp=0.0.0.0:6082 \
     --html=on \
+    --tcp-auth=pam \
     --encoding=auto \
     --dpi=auto \
     --start-child=xfce4-session \
     --exit-with-children=no \
     --sharing=no \
-    --auth=pam \
     --daemon=no \
+    --notifications=no \
+    --bell=no \
+    --systemd-run=no \
     --log-file=/var/log/xpra/desktop.log
 Restart=on-failure
 RestartSec=10
@@ -211,7 +263,12 @@ After=network.target
 [Service]
 Type=simple
 User=${ASTRO_USER}
-ExecStart=/usr/local/bin/ttyd --port 7681 --credential ${ASTRO_USER}:${TTYD_PASS} bash
+ExecStart=/usr/local/bin/ttyd \
+    --port 7681 \
+    --credential ${ASTRO_USER}:${TTYD_PASS} \
+    --interface 0.0.0.0 \
+    --no-check-origin \
+    bash
 Restart=on-failure
 RestartSec=5
 [Install]

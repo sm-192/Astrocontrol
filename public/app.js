@@ -200,7 +200,7 @@ function renderFilterSlots(fw) {
 }
 
 function renderRotator(r) {
-  const angle = parseFloat(r.angle) || 0;
+  const angle   = parseFloat(r.angle) || 0;
   const clamped = Math.max(-90, Math.min(90, angle));
 
   // Badge
@@ -210,14 +210,11 @@ function renderRotator(r) {
     else if (r.moving) { rbadge.textContent = 'Girando'; rbadge.className = 'sec-badge busy'; }
     else               { rbadge.textContent = (clamped >= 0 ? '+' : '') + clamped.toFixed(1) + '°'; rbadge.className = 'sec-badge ok'; }
   }
-
   setText('rot-angle', r.connected ? (clamped >= 0 ? '+' : '') + clamped.toFixed(1) : '--');
 
-  // Needle: range −90→+90 maps to 270°→90° (going through 0°/top)
-  // At 0°: needle points up (x2=40, y2=9)
-  // At +90°: needle points right; at -90°: needle points left
-  const needleAngleDeg = clamped; // degrees from top, clockwise
-  const needleRad = (needleAngleDeg - 90) * Math.PI / 180;
+  // ── Agulha ──
+  // 0° → topo (270° em coord matemática), +90° → direita (0°), -90° → esquerda (180°)
+  const needleRad = (clamped - 90) * Math.PI / 180;
   const nx = 40 + 31 * Math.cos(needleRad);
   const ny = 40 + 31 * Math.sin(needleRad);
   const needle = $('rot-needle');
@@ -226,20 +223,40 @@ function renderRotator(r) {
     needle.setAttribute('y2', ny.toFixed(1));
   }
 
-  // Arc: full range 180°, circumference segment
-  // stroke-dasharray=213.6 is full circle (r=34)
-  // Half circle = 106.8; proportion of −90..+90 filled
-  const arc = $('rot-arc');
-  if (arc) {
-    // pct 0 = at -90, 1 = at +90
-    const pct    = (clamped + 90) / 180;
-    const filled = 106.8 * pct; // half-circle portion
-    // We use a semicircle dasharray trick: show only top half
-    arc.setAttribute('stroke-dasharray', `${filled.toFixed(1)} 213.6`);
-    arc.setAttribute('stroke-dashoffset', '53.4'); // start at left (-90°)
+  // ── Arco de progresso ──
+  // Estratégia: usamos um <path> que vai do ponto em -90° até o ângulo atual,
+  // sempre passando pelo 0° (topo). Para isso:
+  //   - centro (40,40), raio 34
+  //   - ponto em -90°  = (6, 40)   → ângulo 180° em coordenadas SVG
+  //   - ponto em   0°  = (40, 6)   → ângulo 270° em coordenadas SVG
+  //   - ponto em +90°  = (74, 40)  → ângulo 0°   em coordenadas SVG
+  // O arco parte sempre do ponto 0° (topo) e vai até o ângulo atual.
+  // Se positivo → arco curto horário a partir do topo.
+  // Se negativo → arco curto anti-horário a partir do topo.
+  const arcEl = $('rot-arc');
+  if (arcEl) {
+    if (clamped === 0) {
+      arcEl.setAttribute('d', '');
+    } else {
+      const R = 34;
+      const cx = 40, cy = 40;
+      // Ponto de início: sempre o topo (0°)
+      const startX = cx;
+      const startY = cy - R; // (40, 6)
+      // Ponto final: ângulo atual
+      const endRad = (clamped - 90) * Math.PI / 180;
+      const endX   = cx + R * Math.cos(endRad);
+      const endY   = cy + R * Math.sin(endRad);
+      // large-arc-flag: 0 (arco < 180°, sempre verdade aqui pois max é 90°)
+      // sweep-flag: 1 = horário (positivos), 0 = anti-horário (negativos)
+      const sweep = clamped > 0 ? 1 : 0;
+      arcEl.setAttribute('d',
+        `M ${startX} ${startY} A ${R} ${R} 0 0 ${sweep} ${endX.toFixed(2)} ${endY.toFixed(2)}`
+      );
+    }
   }
 
-  // Slider — don't update if user is dragging
+  // ── Slider ──
   const slider = $('rot-slider');
   if (slider && slider !== document.activeElement) {
     slider.value = clamped;
@@ -377,11 +394,8 @@ function renderGotoStatus() {
 function setDot(id, on, warn) {
   const el = $('st-' + id);
   if (!el) return;
-  el.classList.toggle('active', !!on);
-  el.classList.toggle('warn',   !on && !!warn);
-  el.classList.toggle('error',  false);
-  // AP gets special class for blue colour
-  if (id === 'ap') el.classList.toggle('ap', !!on);
+  const dot = el.querySelector('.dot');
+  if (dot) dot.className = 'dot ' + (on ? 'dg' : warn ? 'da' : 'dx');
 }
 
 /* ══════════════════════════════════════════════
@@ -397,25 +411,16 @@ function renderGpsSatIndicator() {
 
   if (!el) return;
 
-  // Icon-pill state
-  el.classList.remove('active','warn','error','ap');
-  if (fix && sats >= 4)  { el.classList.add('active'); }
-  else if (sats > 0)     { el.classList.add('warn'); }
-  // else: default grey
+  // Cor do dot: verde = fix, âmbar = sats sem fix, cinza = nada
+  const dot = el.querySelector('.dot');
+  if (dot) dot.className = 'dot ' + (fix ? 'dg' : sats > 0 ? 'da' : 'dx');
 
-  el.title = fix && sats >= 4
+  el.title = fix
     ? `GPS: fix (${sats} satélites)`
     : sats > 0 ? `GPS: aguardando fix (${sats} sat)`
     : 'GPS: sem sinal';
 
-  // Signal arcs: light up 1→2→3 based on sat count
-  const thresholds = [1, 3, 6];
-  thresholds.forEach((t, i) => {
-    const arc = $(`gps-dot-${i + 1}`);
-    if (arc) arc.style.opacity = sats >= t ? '1' : '0.15';
-  });
-
-  // Count badge
+  // Contador de satélites ao lado do label
   if (cnt) cnt.textContent = sats > 0 ? String(sats) : '';
 }
 
@@ -1355,26 +1360,36 @@ function getDisplayParams(containerEl) {
   return { w: Math.max(w, 320), h: Math.max(h, 240), dpi };
 }
 
-/** Monta URLSearchParams para o Xpra HTML5 client */
-function _xpraParams(port, w, h, dpi, extraParams) {
-  return new URLSearchParams({
-    host:              WS_HOST,
-    port:              String(port),
-    ssl:               '0',
-    autoconnect:       '1',
-    reconnect:         '1',
-    encoding:          'auto',
-    dpi:               String(dpi),
-    desktop_size:      `${w}x${h}`,
-    resize:            '1',          // aceita resize dinâmico
-    keyboard:          'pt-br',
-    clipboard:         '1',
-    swap_keys:         '0',
-    printing:          '0',
-    open_files:        '0',
-    start_new_session: '0',
+/**
+ * Monta URL para o cliente HTML5 do Xpra.
+/**
+ * Monta URL para o Xpra HTML5 client.
+ * Conecta diretamente à porta do Xpra (6080/6081/6082).
+ * O Xpra HTML5 lê configuração pelo hash fragment da URL.
+ *
+ * Parâmetros aceitos pelo xpra-html5:
+ *   server, port, ssl, encoding, username, password,
+ *   dpi, width, height, language, clipboard, floating_menu
+ */
+function _xpraUrl(port, w, h, dpi, extraParams) {
+  const p = {
+    server:        WS_HOST,
+    port:          String(port),
+    ssl:           '0',
+    encoding:      'auto',
+    dpi:           String(dpi),
+    width:         String(w),
+    height:        String(h),
+    language:      'pt-br',
+    clipboard:     '1',
+    floating_menu: '0',
     ...extraParams,
-  });
+  };
+  const hash = Object.entries(p)
+    .filter(([, v]) => v !== '' && v != null)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+  return `http://${WS_HOST}:${port}/index.html#${hash}`;
 }
 
 /**
@@ -1423,13 +1438,12 @@ function connectXpra(frameId, statusId, port, extraParams) {
   if (prev?.resizeTimer) clearTimeout(prev.resizeTimer);
 
   const { w, h, dpi } = getDisplayParams(frame);
-  const params = _xpraParams(port, w, h, dpi, extraParams || {});
-  const url    = `http://${WS_HOST}:${port}/?${params.toString()}`;
+  const url = _xpraUrl(port, w, h, dpi, extraParams || {});
 
   const { layer } = _injectXpraIframe(frame, url);
   if (status) status.textContent = 'Conectado';
 
-  // Salva sessão
+  // Salva sessão (guarda port para reconstruir URL no resize)
   const session = { port, statusId, extraParams: extraParams || {}, lastW: w, lastH: h };
   XPRA_SESSIONS.set(frameId, session);
 
@@ -1442,9 +1456,6 @@ function connectXpra(frameId, statusId, port, extraParams) {
     observer.observe(frame);
     session.observer = observer;
   }
-
-  // Fallback: também ouve orientationchange e resize de janela
-  // (já registrado globalmente no init, veja _xpraGlobalResizeInit)
 }
 
 /**
@@ -1475,14 +1486,13 @@ function _onXpraContainerResize(frameId) {
     session.lastH = h;
 
     // Reconecta com novas dimensões
-    const params  = _xpraParams(session.port, w, h, dpi, session.extraParams);
-    const url     = `http://${WS_HOST}:${session.port}/?${params.toString()}`;
+    const url = _xpraUrl(session.port, w, h, dpi, session.extraParams);
     const { layer } = _injectXpraIframe(frame, url);
     _installTouchLayer(layer, frame);
 
     const status = document.getElementById(session.statusId);
     if (status) status.textContent = 'Conectado';
-  }, 400); // debounce 400ms
+  }, 400);
 }
 
 /** Registra listeners globais de resize/orientation uma única vez */
@@ -1774,11 +1784,14 @@ async function doAuth(type) {
         body: JSON.stringify({ user, password: pwd }),
       });
       if (!res.ok) { if (errEl) errEl.textContent = 'Credenciais inválidas.'; return; }
-      // Token validado no AstroControl server — abre ttyd diretamente
-      // (ttyd não conhece o token, apenas o AstroControl valida)
       const frame  = $('term-frame');
       const status = $('term-status');
-      frame.innerHTML = `<iframe src="http://${WS_HOST}:7681/" style="width:100%;height:100%;border:none;background:#000" allow="fullscreen"></iframe>`;
+      frame.innerHTML = '';
+      const iframe = document.createElement('iframe');
+      iframe.src = `http://${WS_HOST}:7681/`;
+      iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;background:#000;display:block;';
+      iframe.allow = 'fullscreen clipboard-read clipboard-write';
+      frame.appendChild(iframe);
       if (status) status.textContent = 'Conectado';
     } catch (e) {
       if (errEl) errEl.textContent = 'Erro: ' + e.message;

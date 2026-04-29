@@ -54,42 +54,8 @@ body {
 }
 .topbar-left  { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 .topbar-title { font-size: 13px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
-.status-row   { display: flex; gap: 6px; align-items: center; }
-
-/* Status icon pill */
-.si {
-  font-size: 10px; color: #6b7280;
-  display: flex; align-items: center; gap: 3px;
-  white-space: nowrap; transition: color .3s;
-}
-.si-icon {
-  position: relative;
-  padding: 2px 5px 2px 3px;
-  border-radius: 8px;
-  background: rgba(255,255,255,.03);
-  border: .5px solid rgba(255,255,255,.05);
-  gap: 4px;
-  transition: color .3s, border-color .3s;
-}
-.si-icon.active { color: var(--green-l); border-color: rgba(29,158,117,.25); background: rgba(29,158,117,.06); }
-.si-icon.active.ap { color: #85B7EB; border-color: rgba(55,138,221,.25); background: rgba(55,138,221,.06); }
-.si-icon.warn   { color: var(--amber); border-color: rgba(239,159,39,.25); background: rgba(239,159,39,.06); }
-.si-icon.error  { color: var(--red);   border-color: rgba(226,75,74,.25);  background: rgba(226,75,74,.06); }
-
-.si-svg { width: 13px; height: 13px; flex-shrink: 0; }
-
-/* Tiny dot in corner of icon pill */
-.si-dot {
-  width: 5px; height: 5px; border-radius: 50%;
-  background: var(--dim); flex-shrink: 0;
-  transition: background .3s;
-}
-.si-icon.active   .si-dot { background: var(--green); }
-.si-icon.active.ap .si-dot{ background: var(--blue); }
-.si-icon.warn     .si-dot { background: var(--amber); }
-.si-icon.error    .si-dot { background: var(--red); }
-
-/* GPS specific */
+.status-row   { display: flex; gap: 8px; align-items: center; }
+.si { font-size: 10px; color: #9ca3b0; display: flex; align-items: center; gap: 3px; white-space: nowrap; }
 .si-gps { cursor: default; }
 .gps-sat-count {
   font-size: 9px; font-variant-numeric: tabular-nums;
@@ -97,11 +63,8 @@ body {
 }
 @media (max-width: 380px) { .si-label { display: none; } .topbar-title { font-size: 12px; } }
 @media (max-width: 360px) { .gps-sat-count { display: none; } }
-
 .utc-clock { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; font-family: 'SF Mono', Monaco, monospace; white-space: nowrap; flex-shrink: 0; }
 @media (max-width: 479px) { .utc-clock { display: none; } }
-
-/* Legacy dot classes (still used elsewhere) */
 .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; transition: background .3s; }
 .dg { background: var(--green); } .da { background: var(--amber); }
 .dr { background: var(--red); }   .dx { background: var(--dim); }
@@ -882,9 +845,8 @@ body {
 ::-webkit-scrollbar-track { background:transparent; }
 ::-webkit-scrollbar-thumb { background:var(--dim); border-radius:2px; }
 /* ══════════════════════════════════════
-   GPS / STATUS ICONS (see topbar CSS above)
+   GPS / STATUS (dots defined in topbar section above)
    ══════════════════════════════════════ */
-/* .si-gps, .gps-sat-count, .si-dot — defined in topbar section */
 
 /* ══════════════════════════════════════
    XPRA TOUCH LAYER

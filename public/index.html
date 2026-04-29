@@ -24,81 +24,14 @@
     <div class="topbar-left">
       <span class="topbar-title">AstroControl</span>
       <div class="status-row">
-
-        <!-- Pi -->
-        <span class="si si-icon" id="st-pi" title="Raspberry Pi">
-          <svg class="si-svg" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-            <!-- raspberry pi logo simplified -->
-            <path d="M8 1.5c-.6 0-1.1.2-1.5.5-.2-.1-.5-.2-.8-.2-.8 0-1.4.5-1.5 1.2-.5.3-.8.8-.8 1.4 0 .3.1.6.2.8C3.3 5.5 3 6 3 6.5c0 .4.1.7.4 1C3.1 8 3 8.5 3 9c0 1 .5 1.8 1.3 2.3.1.6.4 1 .8 1.3.3.8 1 1.4 1.9 1.4.3 0 .6-.1.9-.2.2.1.5.2.7.2 1 0 1.7-.7 1.9-1.6.3-.3.6-.7.7-1.2C11.5 10.8 12 10 12 9c0-.5-.1-1-.4-1.4.2-.3.4-.6.4-1 0-.5-.3-1-.6-1.3.1-.2.2-.5.2-.8 0-.6-.3-1.1-.8-1.4C10.7 2.5 10.1 2 9.3 2c-.3 0-.5.1-.8.2C8.9 1.7 8.5 1.5 8 1.5z"/>
-            <circle cx="6.2" cy="6.5" r="1" fill="var(--bg0)"/>
-            <circle cx="9.8" cy="6.5" r="1" fill="var(--bg0)"/>
-            <path d="M6 9.5 Q8 11 10 9.5" stroke="var(--bg0)" stroke-width=".7" fill="none" stroke-linecap="round"/>
-          </svg>
-          <span class="si-label">Pi</span>
-          <span class="si-dot" id="dot-pi"></span>
-        </span>
-
-        <!-- INDI -->
-        <span class="si si-icon" id="st-indi" title="INDI Server">
-          <svg class="si-svg" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- star / telescope symbol -->
-            <circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.2"/>
-            <line x1="8" y1="1.5" x2="8" y2="4"   stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-            <line x1="8" y1="12"  x2="8" y2="14.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-            <line x1="1.5" y1="8" x2="4"   y2="8"  stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-            <line x1="12"  y1="8" x2="14.5" y2="8" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-            <line x1="3.4" y1="3.4" x2="5.2" y2="5.2" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-            <line x1="10.8" y1="10.8" x2="12.6" y2="12.6" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-            <line x1="12.6" y1="3.4" x2="10.8" y2="5.2" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-            <line x1="5.2" y1="10.8" x2="3.4" y2="12.6" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-          </svg>
-          <span class="si-label">INDI</span>
-          <span class="si-dot" id="dot-indi"></span>
-        </span>
-
-        <!-- GPS (satélite) -->
-        <span class="si si-icon si-gps" id="st-gps" title="GPS">
-          <svg class="si-svg" id="gps-sat-svg" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- corpo do satélite - diagonal -->
-            <rect x="6.5" y="5" width="3" height="6" rx="0.7"
-                  fill="currentColor" opacity="0.9"
-                  transform="rotate(-35 8 8)"/>
-            <!-- painéis solares esquerda -->
-            <rect x="1.5" y="6.5" width="3.2" height="1.6" rx="0.4"
-                  fill="currentColor" opacity="0.6"
-                  transform="rotate(-35 8 8)"/>
-            <!-- painéis solares direita -->
-            <rect x="11.3" y="6.5" width="3.2" height="1.6" rx="0.4"
-                  fill="currentColor" opacity="0.6"
-                  transform="rotate(-35 8 8)"/>
-            <!-- antena -->
-            <line x1="9.8" y1="3.2" x2="11" y2="1.8"
-                  stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-            <!-- ondas de sinal -->
-            <path id="gps-dot-1" d="M11.4 1.4 Q12.4 2.2 12 3.4"
-                  stroke="currentColor" stroke-width="1" fill="none" stroke-linecap="round" opacity="0.3"/>
-            <path id="gps-dot-2" d="M12.2 0.8 Q14 2.2 13.4 4.2"
-                  stroke="currentColor" stroke-width="1" fill="none" stroke-linecap="round" opacity="0.3"/>
-            <path id="gps-dot-3" d="M13 0.2 Q15.4 2.2 14.6 5"
-                  stroke="currentColor" stroke-width="1" fill="none" stroke-linecap="round" opacity="0.3"/>
-          </svg>
+        <span class="si" id="st-pi"><span class="dot dx"></span><span class="si-label">Pi</span></span>
+        <span class="si" id="st-indi"><span class="dot dx"></span><span class="si-label">INDI</span></span>
+        <span class="si si-gps" id="st-gps" title="GPS">
+          <span class="dot dx" id="dot-gps-main"></span>
           <span class="si-label">GPS</span>
           <span class="gps-sat-count" id="gps-sat-count"></span>
-          <span class="si-dot" id="dot-gps"></span>
         </span>
-
-        <!-- AP (WiFi) -->
-        <span class="si si-icon" id="st-ap" title="Access Point">
-          <svg class="si-svg" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="8" cy="13" r="1.3" fill="currentColor"/>
-            <path d="M5 10.5 Q8 7.5 11 10.5"   stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/>
-            <path d="M2.8 8.3 Q8 3.5 13.2 8.3"  stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" id="ap-arc-2" opacity="0.5"/>
-            <path d="M1 6 Q8 -0.5 15 6"          stroke="currentColor" stroke-width="1.1" fill="none" stroke-linecap="round" id="ap-arc-3" opacity="0.25"/>
-          </svg>
-          <span class="si-label">AP</span>
-          <span class="si-dot" id="dot-ap"></span>
-        </span>
-
+        <span class="si" id="st-ap"><span class="dot dx"></span><span class="si-label">AP</span></span>
       </div>
     </div>
     <span class="utc-clock" id="utc"></span>
@@ -261,24 +194,23 @@
             <div class="rot-display">
               <!-- Dial SVG − mostra arco de -90 a +90 -->
               <svg class="rot-dial" id="rot-dial-svg" viewBox="0 0 80 80" width="80" height="80">
-                <!-- trilha completa -90..+90 = semicírculo inferior -->
-                <path d="M 40 6 A 34 34 0 0 1 74 40 A 34 34 0 0 1 40 74 A 34 34 0 0 1 6 40 A 34 34 0 0 1 40 6"
-                      fill="none" stroke="rgba(255,255,255,.06)" stroke-width="6"/>
-                <!-- arco de progresso animado -->
-                <circle cx="40" cy="40" r="34" fill="none" stroke="var(--green)" stroke-width="6"
-                        stroke-dasharray="213.6" stroke-dashoffset="160.2"
-                        stroke-linecap="round" id="rot-arc"
-                        transform="rotate(-90 40 40)"/>
+                <!-- trilha: semicírculo de -90° (esq) até +90° (dir) passando pelo topo -->
+                <path d="M 6 40 A 34 34 0 0 1 40 6 A 34 34 0 0 1 74 40"
+                      fill="none" stroke="rgba(255,255,255,.08)" stroke-width="5" stroke-linecap="round"/>
+                <!-- arco de progresso: desenhado via JS como <path> -->
+                <path id="rot-arc" d="" fill="none" stroke="var(--green)"
+                      stroke-width="5" stroke-linecap="round"/>
                 <!-- ticks: -90 (esq), 0 (topo), +90 (dir) -->
-                <line x1="40" y1="6"  x2="40" y2="13" stroke="rgba(255,255,255,.3)"  stroke-width="1.2"/>
-                <line x1="6"  y1="40" x2="13" y2="40" stroke="rgba(255,255,255,.15)" stroke-width="1"/>
-                <line x1="74" y1="40" x2="67" y2="40" stroke="rgba(255,255,255,.15)" stroke-width="1"/>
-                <!-- label ticks -->
-                <text x="40" y="4"  text-anchor="middle" font-size="4.5" fill="rgba(255,255,255,.3)">0°</text>
-                <text x="3"  y="42" text-anchor="middle" font-size="4"   fill="rgba(255,255,255,.2)">-90</text>
-                <text x="77" y="42" text-anchor="middle" font-size="4"   fill="rgba(255,255,255,.2)">+90</text>
-                <!-- needle -->
-                <line id="rot-needle" x1="40" y1="40" x2="40" y2="9" stroke="var(--amber)" stroke-width="1.8" stroke-linecap="round"/>
+                <line x1="6"  y1="40" x2="13" y2="40" stroke="rgba(255,255,255,.2)" stroke-width="1"/>
+                <line x1="40" y1="6"  x2="40" y2="13" stroke="rgba(255,255,255,.35)" stroke-width="1.3"/>
+                <line x1="74" y1="40" x2="67" y2="40" stroke="rgba(255,255,255,.2)" stroke-width="1"/>
+                <!-- labels -->
+                <text x="40" y="4.5" text-anchor="middle" font-size="4.5" fill="rgba(255,255,255,.35)">0°</text>
+                <text x="3"  y="42"  text-anchor="middle" font-size="4"   fill="rgba(255,255,255,.2)">-90</text>
+                <text x="77" y="42"  text-anchor="middle" font-size="4"   fill="rgba(255,255,255,.2)">+90</text>
+                <!-- agulha -->
+                <line id="rot-needle" x1="40" y1="40" x2="40" y2="9"
+                      stroke="var(--amber)" stroke-width="1.8" stroke-linecap="round"/>
                 <circle cx="40" cy="40" r="3.5" fill="var(--bg2)" stroke="var(--amber)" stroke-width="1.4"/>
               </svg>
               <div class="rot-val-wrap">
@@ -510,7 +442,7 @@
         </div>
         <div class="novnc-bar-right">
           <button class="bp bp-s sm" onclick="requestFullscreenPanel('vnc-k-frame')">⛶ Tela cheia</button>
-          <button class="bp bp-p sm" onclick="connectXpra('vnc-k-frame','vnc-k-status',6080)">Conectar</button>
+          <button class="bp bp-p sm" onclick="connectXpra('vnc-k-frame','vnc-k-status',6080,{floating_menu:'0',toolbar:'0',keyboard_layout:'pt-br'})">Conectar</button>
         </div>
       </div>
       <!-- Aviso de rotação em portrait -->
@@ -519,7 +451,7 @@
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#5DCAA5" stroke-width="1.5"><rect x="4" y="10" width="40" height="28" rx="3"/><line x1="4" y1="20" x2="44" y2="20"/><circle cx="10" cy="15" r="2" fill="#5DCAA5"/><circle cx="16" cy="15" r="2" fill="#5DCAA5"/></svg>
           <p>Gire o dispositivo para paisagem</p>
           <p class="rotate-sub">KStars requer modo horizontal</p>
-          <button class="bp bp-p" style="margin-top:12px" onclick="connectXpra('vnc-k-frame','vnc-k-status',6080)">Conectar assim mesmo</button>
+          <button class="bp bp-p" style="margin-top:12px" onclick="connectXpra('vnc-k-frame','vnc-k-status',6080,{floating_menu:'0'})">Conectar assim mesmo</button>
         </div>
       </div>
       <div class="novnc-frame" id="vnc-k-frame">
@@ -527,7 +459,7 @@
           <svg width="40" height="40" viewBox="0 0 44 44" fill="none" stroke="#374151" stroke-width="1.5"><rect x="3" y="7" width="38" height="26" rx="2.5"/><line x1="3" y1="15" x2="41" y2="15"/><circle cx="7" cy="11" r="1.5" fill="#374151"/><circle cx="12" cy="11" r="1.5" fill="#374151"/><line x1="16" y1="37" x2="28" y2="37"/><line x1="22" y1="33" x2="22" y2="37"/></svg>
           <p>KStars / Ekos</p>
           <p class="nvph-sub">astropi.local:6080</p>
-          <button class="bp bp-p nvph-btn" onclick="connectXpra('vnc-k-frame','vnc-k-status',6080)">Conectar</button>
+          <button class="bp bp-p nvph-btn" onclick="connectXpra('vnc-k-frame','vnc-k-status',6080,{floating_menu:'0'})">Conectar</button>
         </div>
       </div>
     </div>
@@ -541,7 +473,7 @@
         </div>
         <div class="novnc-bar-right">
           <button class="bp bp-s sm" onclick="requestFullscreenPanel('vnc-p-frame')">⛶ Tela cheia</button>
-          <button class="bp sm" style="background:#633806;color:#FAC775" onclick="connectXpra('vnc-p-frame','vnc-p-status',6081)">Conectar</button>
+          <button class="bp sm" style="background:#633806;color:#FAC775" onclick="connectXpra('vnc-p-frame','vnc-p-status',6081,{floating_menu:'0'})">Conectar</button>
         </div>
       </div>
       <div class="rotate-hint" id="rotate-phd2">
@@ -549,7 +481,7 @@
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#EF9F27" stroke-width="1.5"><polyline points="2,36 10,22 18,30 26,14 34,24 42,18"/><circle cx="26" cy="14" r="3" fill="#EF9F27" stroke="none"/></svg>
           <p>Gire o dispositivo para paisagem</p>
           <p class="rotate-sub">PHD2 requer modo horizontal</p>
-          <button class="bp sm" style="background:#633806;color:#FAC775;margin-top:12px" onclick="connectXpra('vnc-p-frame','vnc-p-status',6081)">Conectar assim mesmo</button>
+          <button class="bp sm" style="background:#633806;color:#FAC775;margin-top:12px" onclick="connectXpra('vnc-p-frame','vnc-p-status',6081,{floating_menu:'0'})">Conectar assim mesmo</button>
         </div>
       </div>
       <div class="novnc-frame" id="vnc-p-frame">
@@ -557,7 +489,7 @@
           <svg width="40" height="40" viewBox="0 0 44 44" fill="none" stroke="#374151" stroke-width="1.5"><polyline points="2,32 8,20 14,26 20,14 26,22 32,16 42,28"/><circle cx="20" cy="14" r="3" stroke="#EF9F27"/></svg>
           <p>PHD2 Guiding</p>
           <p class="nvph-sub">astropi.local:6081</p>
-          <button class="bp nvph-btn" style="background:#633806;color:#FAC775" onclick="connectXpra('vnc-p-frame','vnc-p-status',6081)">Conectar</button>
+          <button class="bp nvph-btn" style="background:#633806;color:#FAC775" onclick="connectXpra('vnc-p-frame','vnc-p-status',6081,{floating_menu:'0'})">Conectar</button>
         </div>
       </div>
     </div>
