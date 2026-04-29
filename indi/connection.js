@@ -8,7 +8,7 @@ const CFG = require('../config/config');
 const { emit, log } = require('../utils/emit');
 
 const { processIndiBuffer } = require('./parser');
-const { parseIndiMessage } = require('./interpreter');
+const { interpret } = require('./interpreter');
 
 
 /* ══════════════════════════════════════════════
@@ -43,7 +43,7 @@ function createIndiConn(session) {
     session.indiBuffer = processIndiBuffer(
       session.indiBuffer,
       (xml, tag) => {
-        parseIndiMessage(xml, tag, session);
+        interpret(xml, tag, session);
       }
     );
   });

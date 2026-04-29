@@ -101,6 +101,4 @@ function initWebSocket(server) {
   return { wss, hbInterval };
 }
 
-module.exports = {
-  initWebSocket,
-};
+module.exports = initWebSocket;
