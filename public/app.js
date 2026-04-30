@@ -1298,7 +1298,7 @@ function _shootFrame() {
   clearTimeout(CAM.framingWatchdog);
   const { exp, gain } = _cameraParams();
   _startExpBar(exp);
-  sendCmd({ type: 'camera_capture', exposure: exp, gain });
+  sendCmd({ type: 'camera_capture', exposure: exp, gain, source: 'framing' });
   _armFramingWatchdog(exp);
   // Overlay
   const ov    = $('cam-framing-overlay');
@@ -1328,9 +1328,18 @@ function toggleCapture() {
 function _startCapture() {
   CAM.mode = 'capturing';
   const { exp, gain } = _cameraParams();
+  const filterRaw = parseInt($('seq-filter')?.value);
   _startExpBar(exp);
   _updateCamButtons();
-  sendCmd({ type: 'camera_capture', exposure: exp, gain });
+  sendCmd({
+    type: 'camera_capture',
+    exposure: exp,
+    gain,
+    source: 'manual',
+    target: ($('seq-target')?.value || 'Alvo').trim(),
+    frameType: $('seq-type')?.value || 'Light',
+    filterSlot: Number.isFinite(filterRaw) ? filterRaw : null,
+  });
 }
 
 function _stopCapture(sendAbort) {

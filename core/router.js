@@ -58,6 +58,8 @@ const {
   emitSequence,
 } = require('../services/sequencer');
 
+const { rememberPendingCapture } = require('../services/storage');
+
 /* ── Utils ── */
 const { emit } = require('../utils/emit');
 const {
@@ -146,6 +148,16 @@ function handleMsg(session, msg) {
 
     /* ── Câmera ── */
     case 'camera_capture':
+      if (msg.source !== 'framing') {
+        rememberPendingCapture(session, {
+          source: msg.source || 'manual',
+          target: msg.target || 'Alvo',
+          type: msg.frameType || msg.type || 'Light',
+          exposure: msg.exposure,
+          gain: msg.gain,
+          filterSlot: msg.filterSlot || null,
+        });
+      }
       indiCameraCapture(session, msg.exposure, msg.gain);
       break;
 

@@ -18,6 +18,9 @@ package-lock.json
 logs/
 *.log
 
+# ── Dados gerados pelo AstroControl ──────────
+data/
+
 # ── Python ───────────────────────────────────
 __pycache__/
 *.py[cod]

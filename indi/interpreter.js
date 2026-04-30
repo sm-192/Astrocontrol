@@ -10,6 +10,7 @@ const { DEVICE_STATE, patchDevice, KNOWN_DEVICES, deviceKey } = require('./state
 const { emit, log } = require('../utils/emit');
 const { formatRA, formatDec } = require('../utils/format');
 const { notifySequenceFrame } = require('../services/sequencer');
+const { takePendingCapture, saveCameraFrame } = require('../services/storage');
 
 /* ══════════════════════════════════════════════
    HELPERS XML
@@ -327,14 +328,28 @@ function interpret(xml, tag, session) {
 
       const fmt = (xAttr(xml, 'format') || 'fits').replace('.', '').toLowerCase();
       const sendFmt = ['jpg','jpeg','png'].includes(fmt) ? fmt : 'fits';
+      const savedFrame = saveCameraFrame({
+        data: raw,
+        format: sendFmt,
+        meta: takePendingCapture(session),
+      });
 
       emit(ws, 'camera_image', {
         data: raw,
         format: sendFmt,
         device: device || '',
+        saved: savedFrame ? {
+          path: savedFrame.relativePath,
+          size: savedFrame.size,
+          source: savedFrame.source,
+        } : null,
       });
 
-      notifySequenceFrame(session);
+      if (savedFrame) {
+        log(ws, 'ok', `Imagem salva: ${savedFrame.relativePath}`);
+      }
+
+      notifySequenceFrame(session, savedFrame);
 
       patchDevice('camera', { capturing: false });
       emit(ws, 'device_update', { key: 'camera', data: DEVICE_STATE.camera });

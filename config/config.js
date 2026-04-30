@@ -16,6 +16,7 @@ const CFG = {
   INDIWEB_PORT:      8624,
 
   PUBLIC_DIR:        path.join(__dirname, '../public'),
+  DATA_DIR:          path.join(__dirname, '../data'),
 
   HEARTBEAT_MS:      15000,
 

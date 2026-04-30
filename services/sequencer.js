@@ -4,24 +4,27 @@ const { emit, log } = require('../utils/emit');
 const { indiCameraCapture, indiCameraAbort } = require('../indi/commands/camera');
 const { indiFilterSet } = require('../indi/commands/filterwheel');
 const { phd2Dither } = require('./phd2');
+const { loadSequence, saveSequence, rememberPendingCapture } = require('./storage');
 
 const SEQUENCES = new WeakMap();
 
 function seqFor(session) {
   let seq = SEQUENCES.get(session);
   if (!seq) {
+    const saved = loadSequence();
     seq = {
-      queue: [],
+      queue: saved?.queue || [],
       running: false,
       paused: false,
-      currentIndex: -1,
-      frameInItem: 0,
-      doneFrames: 0,
-      totalFrames: 0,
+      currentIndex: saved?.currentIndex ?? -1,
+      frameInItem: saved?.frameInItem || 0,
+      doneFrames: saved?.doneFrames || 0,
+      totalFrames: saved?.totalFrames || 0,
       awaitingFrame: false,
-      status: 'Pronto',
+      status: saved?.queue?.length ? 'Fila carregada' : 'Pronto',
       timer: null,
     };
+    recomputeTotals(seq);
     SEQUENCES.set(session, seq);
   }
   return seq;
@@ -75,6 +78,7 @@ function addSequenceItem(session, item) {
   seq.queue.push(normalizeItem(item));
   recomputeTotals(seq);
   seq.status = 'Fila atualizada';
+  saveSequence(seq);
   emitSequence(session);
 }
 
@@ -84,6 +88,7 @@ function removeSequenceItem(session, id) {
   seq.queue = seq.queue.filter(item => item.id !== id);
   recomputeTotals(seq);
   seq.status = 'Item removido';
+  saveSequence(seq);
   emitSequence(session);
 }
 
@@ -97,6 +102,7 @@ function clearSequence(session) {
   seq.totalFrames = 0;
   seq.awaitingFrame = false;
   seq.status = 'Fila vazia';
+  saveSequence(seq);
   emitSequence(session);
 }
 
@@ -118,6 +124,7 @@ function startSequence(session) {
   seq.queue.forEach(item => { item.done = 0; });
   recomputeTotals(seq);
   log(session.ws, 'ok', 'Sequência iniciada');
+  saveSequence(seq);
   emitSequence(session);
   shootNext(session);
 }
@@ -131,6 +138,7 @@ function stopSequence(session, abort = true) {
   seq.status = 'Parada';
   if (abort) indiCameraAbort(session);
   log(session.ws, 'wn', 'Sequência parada');
+  saveSequence(seq);
   emitSequence(session);
 }
 
@@ -154,6 +162,7 @@ async function shootNext(session) {
     seq.awaitingFrame = false;
     seq.status = 'Concluída';
     log(session.ws, 'ok', 'Sequência concluída');
+    saveSequence(seq);
     emitSequence(session);
     return;
   }
@@ -164,11 +173,21 @@ async function shootNext(session) {
 
   seq.status = `${item.target} · ${item.type} ${item.done + 1}/${item.count}`;
   seq.awaitingFrame = true;
+  rememberPendingCapture(session, {
+    source: 'sequence',
+    target: item.target,
+    type: item.type,
+    exposure: item.exposure,
+    gain: item.gain,
+    filterSlot: item.filterSlot,
+    sequenceItemId: item.id,
+  });
+  saveSequence(seq);
   emitSequence(session);
   indiCameraCapture(session, item.exposure, item.gain);
 }
 
-async function notifySequenceFrame(session) {
+async function notifySequenceFrame(session, savedFrame = null) {
   const seq = seqFor(session);
   if (!seq.running || !seq.awaitingFrame) return;
 
@@ -179,7 +198,10 @@ async function notifySequenceFrame(session) {
   item.done += 1;
   seq.frameInItem = item.done;
   seq.doneFrames += 1;
-  seq.status = `${item.target} · recebido ${item.done}/${item.count}`;
+  seq.status = savedFrame?.relativePath
+    ? `${item.target} · salvo ${item.done}/${item.count}`
+    : `${item.target} · recebido ${item.done}/${item.count}`;
+  saveSequence(seq);
   emitSequence(session);
 
   const shouldDither = item.ditherEvery > 0 &&
