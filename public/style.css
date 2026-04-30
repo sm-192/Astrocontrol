@@ -20,7 +20,7 @@
   --border: rgba(255,255,255,0.07); --border-mid: rgba(255,255,255,0.13);
   --text: #e8eaf0; --muted: #6b7280; --dim: #374151;
   --green: #1D9E75; --green-l: #5DCAA5; --green-d: #0F6E56;
-  --amber: #EF9F27; --red: #E24B4A; --blue: #378ADD; --purple: #7F77DD;
+  --amber: #EF9F27; --red: #E24B4A; --blue: #378ADD; --blue-d: #1F5E99; --purple: #7F77DD;
   --topbar-h: 42px; --tabs-h: 48px;
   --joy: 144px; --jb: 46px;
 }
@@ -729,7 +729,7 @@ body {
 
 
 /* ══════════════════════════════════════
-   ABAS REMOTAS (KStars, PHD2, Desktop, Terminal)
+   ABAS REMOTAS (KasmVNC, Terminal)
    ══════════════════════════════════════ */
 .remote-bar {
   display:flex; align-items:center; justify-content:space-between;
@@ -758,10 +758,10 @@ body {
 .rotate-hint-inner p { font-size:14px; color:var(--text); }
 .rotate-sub { font-size:11px; color:var(--muted) !important; }
 
-.nvph { text-align:center; padding:24px 16px; }
-.nvph p { font-size:12px; color:var(--muted); margin-top:8px; }
-.nvph-sub { font-size:11px; color:var(--dim) !important; }
-.nvph-btn { margin-top:14px; font-size:12px; padding:10px 22px; }
+.remote-placeholder { text-align:center; padding:24px 16px; }
+.remote-placeholder p { font-size:12px; color:var(--muted); margin-top:8px; }
+.remote-placeholder-sub { font-size:11px; color:var(--dim) !important; }
+.remote-placeholder-btn { margin-top:14px; font-size:12px; padding:10px 22px; }
 
 /* ── Auth box ── */
 .auth-box { background:var(--bg2); border:.5px solid rgba(255,255,255,.08); border-radius:12px; padding:24px 20px; width:min(300px,92vw); text-align:center; }
@@ -867,71 +867,3 @@ body {
 /* ══════════════════════════════════════
    GPS / STATUS (dots defined in topbar section above)
    ══════════════════════════════════════ */
-
-/* ══════════════════════════════════════
-   REMOTE TOUCH LAYER
-   ══════════════════════════════════════ */
-
-/* Wrapper que recebe gestos touch e contém o iframe */
-.remote-touch-layer {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  /* Cursor indica que a área é interativa */
-  cursor: crosshair;
-  /* Remove highlight azul no tap (mobile) */
-  -webkit-tap-highlight-color: transparent;
-  touch-action: none; /* nós gerenciamos tudo manualmente */
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* O iframe dentro da touch layer: pointer-events desabilitado para que
-   os toques sejam interceptados pela layer, não pelo iframe diretamente */
-.remote-touch-layer iframe {
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: 0 0;
-  /* Transição suave ao aplicar zoom */
-  transition: transform 0.05s linear;
-}
-
-/* Feedback visual de clique direito (long press) */
-.remote-rightclick-flash::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgba(239, 159, 39, 0.15);
-  pointer-events: none;
-  border-radius: 4px;
-  animation: remote-flash 0.2s ease-out forwards;
-}
-
-@keyframes remote-flash {
-  from { opacity: 1; }
-  to   { opacity: 0; }
-}
-
-/* Indicador de zoom ativo (aparece brevemente no canto) */
-.remote-zoom-badge {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
-  background: rgba(8,12,24,0.85);
-  border: 0.5px solid rgba(255,255,255,0.15);
-  color: #9ca3b0;
-  font-size: 10px;
-  font-family: 'SF Mono', Monaco, monospace;
-  padding: 3px 7px;
-  border-radius: 6px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s;
-  z-index: 10;
-}
-.remote-zoom-badge.visible {
-  opacity: 1;
-}

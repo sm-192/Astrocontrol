@@ -34,9 +34,7 @@ function isDynamic(url) {
     url.includes('/ws')      ||
     url.protocol === 'ws:'   ||
     url.protocol === 'wss:'  ||
-    url.port === '6080'      ||
-    url.port === '6081'      ||
-    url.port === '6082'      ||
+    url.port === '8443'      ||
     url.port === '7681'      ||
     url.port === '8624'      ||
     url.port === '8765'      ||

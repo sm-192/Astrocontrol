@@ -37,6 +37,7 @@ const STATE = {
 };
 
 let rafPending = false;
+let _rotCommitTimer = null;
 
 function setState(patch) {
   deepMerge(STATE, patch);
@@ -432,6 +433,7 @@ function renderGpsSatIndicator() {
 const WS_HOST = window.location.hostname || 'astropi.local';
 const WS_PORT = parseInt(window.location.port) || 3000;
 const WS_URL = `ws://${WS_HOST}:${WS_PORT}/ws`;
+const KASMVNC_PORT = 8443;
 
 let ws = null;
 let wsBackoff = 1000;
@@ -632,12 +634,13 @@ function connectSensors() {
 
   sensorWs.onmessage = (evt) => {
     try {
-      const d = JSON.parse(evt.data);
+      const d = normalizeSensorPayload(JSON.parse(evt.data));
       if (typeof applyAlignData === 'function') applyAlignData(d);
-      // GPS state updated via device_update; also update from sensor bridge
-      if (d.sats != null) {
-        STATE.devices.gps.sats = d.sats;
-        STATE.devices.gps.fix  = !!d.fix;
+      if (d.sats != null || d.fix != null || d.lat != null || d.lon != null) {
+        if (d.lat != null) STATE.devices.gps.lat = d.lat;
+        if (d.lon != null) STATE.devices.gps.lon = d.lon;
+        if (d.sats != null) STATE.devices.gps.sats = d.sats;
+        if (d.fix != null) STATE.devices.gps.fix = !!d.fix;
         renderGpsSatIndicator();
       }
     } catch { }
@@ -651,6 +654,25 @@ function connectSensors() {
     if (typeof updateSensorBanner === 'function') updateSensorBanner(false);
     sensorBackoff = Math.min(sensorBackoff * 1.5, 30000);
     setTimeout(connectSensors, sensorBackoff);
+  };
+}
+
+function normalizeSensorPayload(raw) {
+  const gps = raw.gps || {};
+  const decMag = raw.decMag ?? raw.mag_dec;
+  const heading = raw.heading ??
+    (raw.true_heading != null && decMag != null
+      ? ((raw.true_heading - decMag) % 360 + 360) % 360
+      : raw.true_heading);
+
+  return {
+    ...raw,
+    heading,
+    lat: raw.lat ?? gps.lat,
+    lon: raw.lon ?? gps.lon,
+    fix: raw.fix ?? gps.fix,
+    sats: raw.sats ?? gps.sats,
+    decMag,
   };
 }
 
@@ -735,10 +757,8 @@ function _showFsOverlay(panelId) {
   overlay.appendChild(exitBtn);
 
   /* Para painéis remotos: move o iframe para o overlay */
-  const frameId = panelId === 'p-kstars' ? 'vnc-k-frame' :
-    panelId === 'p-phd2' ? 'vnc-p-frame' :
-      panelId === 'p-desktop' ? 'vnc-d-frame' :
-        panelId === 'p-terminal' ? 'term-frame' : null;
+  const frameId = panelId === 'p-desktop' ? 'remote-d-frame' :
+    panelId === 'p-terminal' ? 'term-frame' : null;
 
   if (frameId) {
     const frame = $(frameId);
@@ -777,10 +797,8 @@ function _showFsOverlay(panelId) {
 }
 
 function requestFullscreenPanel(frameId) {
-  /* Atalho para abas remotas — mantém compatibilidade */
   const map = {
-    'vnc-k-frame': 'p-kstars', 'vnc-p-frame': 'p-phd2',
-    'vnc-d-frame': 'p-desktop', 'term-frame': 'p-terminal',
+    'remote-d-frame': 'p-desktop', 'term-frame': 'p-terminal',
   };
   enterFullscreen(map[frameId] || frameId);
 }
@@ -1262,9 +1280,7 @@ document.addEventListener('dblclick', (e) => {
 
 /* ─── mapa frameId → id do rotate-hint ─── */
 const _rotateHintMap = {
-  'vnc-k-frame': 'rotate-kstars',
-  'vnc-p-frame': 'rotate-phd2',
-  'vnc-d-frame': 'rotate-desktop',
+  'remote-d-frame': 'rotate-desktop',
 };
 
 /** Esconde o rotate-hint para que o iframe fique acessível em portrait */
@@ -1279,67 +1295,11 @@ function _hideRotateHint(frameId) {
 }
 
 /* ══════════════════════════════════════════════
-   GPS SATELLITE INDICATOR
-   ══════════════════════════════════════════════ */
-
-function renderGpsSatIndicator() {
-  const gps   = STATE.devices.gps;
-  const sats  = gps.sats || 0;
-  const fix   = gps.fix;
-  const el    = document.getElementById('st-gps');
-  const cnt   = document.getElementById('gps-sat-count');
-  const svg   = document.getElementById('gps-sat-svg');
-
-  if (!el) return;
-
-  // Color: green = fix + sats>=4, amber = some sats no fix, red = no sats
-  let color, title;
-  if (fix && sats >= 4) {
-    color = 'var(--green)';   title = `GPS: fix (${sats} satélites)`;
-  } else if (sats > 0) {
-    color = 'var(--amber)';   title = `GPS: sem fix (${sats} satélite${sats>1?'s':''})`;
-  } else {
-    color = 'var(--dim)';     title = 'GPS: sem sinal';
-  }
-
-  el.style.color = color;
-  el.title = title;
-
-  // Animate signal dots based on sat count (0-3 dots active)
-  const thresholds = [1, 3, 6];
-  thresholds.forEach((t, i) => {
-    const dot = document.getElementById(`gps-dot-${i+1}`);
-    if (dot) dot.style.opacity = sats >= t ? '1' : '0.18';
-  });
-
-  // Satellite count badge
-  if (cnt) {
-    cnt.textContent = sats > 0 ? sats : '';
-    cnt.style.color = color;
-  }
-}
-
-/* ══════════════════════════════════════════════
-   REMOTE — Dynamic resize + touch layer
+   KASMVNC — iframe remoto
    ══════════════════════════════════════════════
 
-   Arquitetura:
-   ┌─ .remote-frame (frameId) ──────────────────┐
-   │  ┌─ .remote-touch-layer ──────────────────┐ │
-   │  │  (captura touch, aplica transform)   │ │
-   │  │  ┌─ iframe (cliente HTML5 remoto) ──┐  │ │
-   │  │  │  sessão remota escalada        │  │ │
-   │  │  └────────────────────────────────┘  │ │
-   │  └──────────────────────────────────────┘ │
-   └───────────────────────────────────────────┘
-
-   Gestos suportados:
-   - Tap simples         → clique esquerdo
-   - Tap duplo           → clique duplo
-   - Tap longo (500ms)   → clique direito
-   - 2 dedos pinch       → zoom (scale do iframe)
-   - 2 dedos pan         → scroll (wheel events)
-   - 1 dedo pan (após tap) → move mouse remoto
+   KasmVNC já fornece o cliente HTML5 completo. O AstroControl
+   só embute a página web do servidor KasmVNC.
    ══════════════════════════════════════════════ */
 
 /* Registro de sessões remotas ativas: frameId → { port, statusId, auth, resizeTimer, observer } */
@@ -1362,69 +1322,33 @@ function getDisplayParams(containerEl) {
 }
 
 /**
- * Monta URL para o cliente HTML5 remoto.
- * Conecta diretamente à porta do servidor remoto (6080/6081/6082).
- * O cliente HTML5 lê configuração pelo hash fragment da URL.
- *
- * Parâmetros aceitos pelo cliente HTML5 remoto:
- *   server, port, ssl, encoding, username, password,
- *   dpi, width, height, language, clipboard, floating_menu
+ * Monta URL para o cliente web do KasmVNC.
  */
-function _remoteClientUrl(port, w, h, dpi, extraParams) {
-  const p = {
-    server:        WS_HOST,
-    port:          String(port),
-    ssl:           '0',
-    encoding:      'auto',
-    dpi:           String(dpi),
-    width:         String(w),
-    height:        String(h),
-    language:      'pt-br',
-    clipboard:     '1',
-    floating_menu: '0',
-    ...extraParams,
-  };
-  const hash = Object.entries(p)
-    .filter(([, v]) => v !== '' && v != null)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  return `http://${WS_HOST}:${port}/index.html#${hash}`;
+function _remoteClientUrl(port) {
+  return `https://${WS_HOST}:${port || KASMVNC_PORT}/`;
 }
 
 /**
- * Injeta o iframe remoto dentro de uma camada de touch.
- * Retorna o wrapper criado.
+ * Injeta o iframe remoto.
  */
 function _injectRemoteIframe(frame, url) {
-  // Remove conteúdo anterior
   frame.innerHTML = '';
-
-  // Wrapper que recebe os gestos touch
-  const layer = document.createElement('div');
-  layer.className = 'remote-touch-layer';
-
-  // Badge de zoom (aparece brevemente ao fazer pinch)
-  const badge = document.createElement('div');
-  badge.className = 'remote-zoom-badge';
-  badge.textContent = '1×';
-  layer.appendChild(badge);
 
   const iframe = document.createElement('iframe');
   iframe.src = url;
   iframe.style.cssText = 'width:100%;height:100%;border:none;background:#000;display:block;';
   iframe.allow = 'fullscreen clipboard-read clipboard-write';
 
-  layer.appendChild(iframe);
-  frame.appendChild(layer);
+  frame.appendChild(iframe);
 
-  return { layer, iframe };
+  return { iframe };
 }
 
 /**
  * Conecta (ou reconecta) uma sessão remota.
  * Registra observers para resize automático.
  */
-function connectRemote(frameId, statusId, port, extraParams) {
+function connectRemote(frameId, statusId, port) {
   const frame  = document.getElementById(frameId);
   const status = document.getElementById(statusId);
   if (!frame) return;
@@ -1436,18 +1360,14 @@ function connectRemote(frameId, statusId, port, extraParams) {
   if (prev?.observer) prev.observer.disconnect();
   if (prev?.resizeTimer) clearTimeout(prev.resizeTimer);
 
-  const { w, h, dpi } = getDisplayParams(frame);
-  const url = _remoteClientUrl(port, w, h, dpi, extraParams || {});
+  const { w, h } = getDisplayParams(frame);
+  const url = _remoteClientUrl(port);
 
-  const { layer } = _injectRemoteIframe(frame, url);
+  _injectRemoteIframe(frame, url);
   if (status) status.textContent = 'Conectado';
 
-  // Salva sessão (guarda port para reconstruir URL no resize)
-  const session = { port, statusId, extraParams: extraParams || {}, lastW: w, lastH: h };
+  const session = { port, statusId, lastW: w, lastH: h };
   REMOTE_SESSIONS.set(frameId, session);
-
-  // Instala touch layer
-  _installTouchLayer(layer, frame);
 
   // Observer de resize do container
   if (typeof ResizeObserver !== 'undefined') {
@@ -1474,7 +1394,7 @@ function _onRemoteContainerResize(frameId) {
     const panel = frame.closest('.panel');
     if (panel && !panel.classList.contains('active')) return;
 
-    const { w, h, dpi } = getDisplayParams(frame);
+    const { w, h } = getDisplayParams(frame);
 
     // Threshold: ignora mudanças menores que 5%
     const dw = Math.abs(w - session.lastW) / session.lastW;
@@ -1483,11 +1403,6 @@ function _onRemoteContainerResize(frameId) {
 
     session.lastW = w;
     session.lastH = h;
-
-    // Reconecta com novas dimensões
-    const url = _remoteClientUrl(session.port, w, h, dpi, session.extraParams);
-    const { layer } = _injectRemoteIframe(frame, url);
-    _installTouchLayer(layer, frame);
 
     const status = document.getElementById(session.statusId);
     if (status) status.textContent = 'Conectado';
@@ -1517,251 +1432,6 @@ function _remoteGlobalResizeInit() {
       REMOTE_SESSIONS.forEach((_, frameId) => _onRemoteContainerResize(frameId));
     }, 300);
   });
-}
-
-/* ──────────────────────────────────────────────
-   TOUCH LAYER — gestos sobre o iframe remoto
-   ────────────────────────────────────────────── */
-
-/**
- * Instala o handler de gestos na camada de touch.
- *
- * Gestos → ações:
- *  tap (< 250ms, < 10px)       → mousedown + mouseup (click)
- *  double tap (< 300ms entre)  → dblclick
- *  long press (≥ 500ms)        → contextmenu (botão direito)
- *  1 dedo pan                  → mousemove (move cursor remoto)
- *  2 dedos pinch               → zoom (CSS scale no iframe)
- *  2 dedos pan                 → scroll wheel no iframe
- *
- * Estratégia: a touch-layer fica sobre o iframe com pointer-events:none
- * no iframe. Os eventos são traduzidos para mouse events sintéticos
- * despachados sobre o iframe (que o cliente HTML5 remoto processa).
- */
-function _installTouchLayer(layer, frame) {
-  // Remove listeners anteriores clonando o elemento
-  const fresh = layer.cloneNode(true);
-  layer.parentNode?.replaceChild(fresh, layer);
-  layer = fresh;
-
-  // O iframe dentro da layer
-  const iframe = layer.querySelector('iframe');
-  if (!iframe) return;
-
-  // Variáveis de estado de gesto
-  let touches        = {};     // id → {x,y}
-  let tapTimer       = null;
-  let longPressTimer = null;
-  let lastTapTime    = 0;
-  let lastTapPos     = { x: 0, y: 0 };
-  let panStartX      = 0, panStartY = 0;
-  let isPanning      = false;
-  let pinchStartDist = 0;
-  let currentScale   = 1;
-  let pinchActive    = false;
-
-  // Clamp scale entre 0.5× e 4×
-  const SCALE_MIN = 0.5, SCALE_MAX = 4.0;
-
-  function getPos(touch, el) {
-    const rect = el.getBoundingClientRect();
-    return {
-      x: (touch.clientX - rect.left) / currentScale,
-      y: (touch.clientY - rect.top)  / currentScale,
-    };
-  }
-
-  function dist2(t1, t2) {
-    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-  }
-
-  function midpoint(t1, t2) {
-    return {
-      x: (t1.clientX + t2.clientX) / 2,
-      y: (t1.clientY + t2.clientY) / 2,
-    };
-  }
-
-  /** Despacha evento de mouse sintético no documento do iframe */
-  function sendMouseEvent(type, x, y, button) {
-    try {
-      const iDoc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (!iDoc) return;
-      const el = iDoc.elementFromPoint(x, y) || iDoc.body;
-      el?.dispatchEvent(new MouseEvent(type, {
-        bubbles: true, cancelable: true,
-        clientX: x, clientY: y,
-        screenX: x, screenY: y,
-        button: button || 0, buttons: type === 'mousedown' ? 1 : 0,
-        view: iframe.contentWindow,
-      }));
-    } catch { /* cross-origin — cliente remoto usa mesmo host, mas pode falhar */ }
-  }
-
-  /** Despacha wheel event (scroll) no iframe */
-  function sendWheelEvent(x, y, deltaX, deltaY) {
-    try {
-      const iDoc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (!iDoc) return;
-      const el = iDoc.elementFromPoint(x, y) || iDoc.body;
-      el?.dispatchEvent(new WheelEvent('wheel', {
-        bubbles: true, cancelable: true,
-        clientX: x, clientY: y,
-        deltaX, deltaY, deltaMode: 0,
-        view: iframe.contentWindow,
-      }));
-    } catch { }
-  }
-
-  let zoomBadgeTimer = null;
-  function applyScale(scale) {
-    currentScale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, scale));
-    iframe.style.transform       = `scale(${currentScale})`;
-    iframe.style.transformOrigin = '0 0';
-    iframe.style.width           = `${100 / currentScale}%`;
-    iframe.style.height          = `${100 / currentScale}%`;
-    // Atualiza badge de zoom
-    const badge = layer.querySelector('.remote-zoom-badge');
-    if (badge) {
-      badge.textContent = `${currentScale.toFixed(1)}×`;
-      badge.classList.add('visible');
-      clearTimeout(zoomBadgeTimer);
-      zoomBadgeTimer = setTimeout(() => badge.classList.remove('visible'), 1200);
-    }
-  }
-
-  // ── touchstart ─────────────────────────────────────────────────────────
-  layer.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    Array.from(e.changedTouches).forEach(t => {
-      touches[t.identifier] = { x: t.clientX, y: t.clientY, startX: t.clientX, startY: t.clientY };
-    });
-
-    const ids = Object.keys(touches);
-
-    if (ids.length === 1) {
-      const t = e.changedTouches[0];
-      panStartX = t.clientX;
-      panStartY = t.clientY;
-      isPanning = false;
-      pinchActive = false;
-
-      // Long press → botão direito
-      longPressTimer = setTimeout(() => {
-        const pos = getPos(t, layer);
-        sendMouseEvent('contextmenu', pos.x, pos.y, 2);
-        // Feedback visual
-        layer.classList.add('remote-rightclick-flash');
-        setTimeout(() => layer.classList.remove('remote-rightclick-flash'), 200);
-      }, 500);
-
-    } else if (ids.length === 2) {
-      clearTimeout(longPressTimer);
-      const tArr = e.touches;
-      pinchStartDist = dist2(tArr[0], tArr[1]);
-      pinchActive = true;
-    }
-  }, { passive: false });
-
-  // ── touchmove ──────────────────────────────────────────────────────────
-  layer.addEventListener('touchmove', (e) => {
-    e.preventDefault();
-    Array.from(e.changedTouches).forEach(t => {
-      if (touches[t.identifier]) {
-        touches[t.identifier].x = t.clientX;
-        touches[t.identifier].y = t.clientY;
-      }
-    });
-
-    const tArr = e.touches;
-
-    if (tArr.length === 2 && pinchActive) {
-      clearTimeout(longPressTimer);
-      // Pinch → zoom
-      const newDist  = dist2(tArr[0], tArr[1]);
-      const scaleDelta = newDist / pinchStartDist;
-      applyScale(currentScale * scaleDelta);
-      pinchStartDist = newDist;
-
-      // 2 dedos pan → scroll
-      const mid = midpoint(tArr[0], tArr[1]);
-      const pos = getPos({ clientX: mid.x, clientY: mid.y }, layer);
-      const dx = tArr[0].clientX - (touches[tArr[0].identifier]?.startX || tArr[0].clientX);
-      const dy = tArr[0].clientY - (touches[tArr[0].identifier]?.startY || tArr[0].clientY);
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        sendWheelEvent(pos.x, pos.y, -dx * 2, -dy * 2);
-      }
-
-    } else if (tArr.length === 1 && !pinchActive) {
-      const t = tArr[0];
-      const dx = t.clientX - panStartX;
-      const dy = t.clientY - panStartY;
-
-      if (!isPanning && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
-        isPanning = true;
-        clearTimeout(longPressTimer);
-      }
-
-      if (isPanning) {
-        const pos = getPos(t, layer);
-        sendMouseEvent('mousemove', pos.x, pos.y);
-        panStartX = t.clientX;
-        panStartY = t.clientY;
-      }
-    }
-  }, { passive: false });
-
-  // ── touchend ───────────────────────────────────────────────────────────
-  layer.addEventListener('touchend', (e) => {
-    e.preventDefault();
-    clearTimeout(longPressTimer);
-
-    const ended = Array.from(e.changedTouches);
-    const wasOneTouch = Object.keys(touches).length === 1;
-
-    ended.forEach(t => { delete touches[t.identifier]; });
-
-    const remaining = Object.keys(touches).length;
-    if (remaining === 0) pinchActive = false;
-
-    if (!isPanning && wasOneTouch && ended.length === 1) {
-      const t = ended[0];
-      const pos = getPos(t, layer);
-
-      const now = Date.now();
-      const dtap = now - lastTapTime;
-      const dpx  = Math.hypot(t.clientX - lastTapPos.x, t.clientY - lastTapPos.y);
-
-      if (dtap < 300 && dpx < 30) {
-        // Double tap → zoom reset ou dblclick
-        if (currentScale !== 1) {
-          applyScale(1);
-        } else {
-          sendMouseEvent('dblclick', pos.x, pos.y);
-        }
-        lastTapTime = 0;
-      } else {
-        // Single tap → click
-        sendMouseEvent('mousedown', pos.x, pos.y);
-        setTimeout(() => sendMouseEvent('mouseup', pos.x, pos.y), 60);
-        lastTapTime = now;
-        lastTapPos  = { x: t.clientX, y: t.clientY };
-      }
-    }
-
-    isPanning = false;
-  }, { passive: false });
-
-  layer.addEventListener('touchcancel', (e) => {
-    clearTimeout(longPressTimer);
-    Array.from(e.changedTouches).forEach(t => delete touches[t.identifier]);
-    isPanning = false; pinchActive = false;
-  }, { passive: false });
-}
-
-function connectVNC(frameId, statusId, port) {
-  // Alias mantido por compatibilidade — redireciona para a conexão remota
-  connectRemote(frameId, statusId, port);
 }
 
 function showAuth(type) {
@@ -1797,15 +1467,8 @@ async function doAuth(type) {
     }
 
   } else if (type === 'desktop') {
-    const user   = ($('user-desktop')?.value || '').trim() || 'samu192';
-    const pwd    = $('pwd-desktop')?.value || '';
-    if (!pwd) { if (errEl) errEl.textContent = 'Digite a senha.'; return; }
-    connectRemote('vnc-d-frame', 'vnc-d-status', 6082, {
-      username: user,
-      password: pwd,
-      sharing:  '0',
-    });
-    _hideRotateHint('vnc-d-frame');
+    connectRemote('remote-d-frame', 'remote-d-status', KASMVNC_PORT);
+    _hideRotateHint('remote-d-frame');
   }
 }
 
